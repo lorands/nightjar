@@ -3,7 +3,10 @@ plugins {
     id("org.jetbrains.kotlin.jvm")
 }
 
-group = "dev.nightjar"
+// Maven coordinates. Verified on Maven Central via lorands.com (the com.lorands
+// namespace covers every com.lorands.* subgroup). Kotlin packages stay
+// dev.nightjar.* — package names and Maven coordinates are independent.
+group = "com.lorands.nightjar"
 
 // Release builds pass -Pversion=<semver>; the release workflow derives it from the
 // git tag. Everything else builds as the snapshot.

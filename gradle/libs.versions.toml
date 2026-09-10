@@ -1,5 +1,6 @@
 [versions]
 kotlin = "2.4.0"
+dokka = "2.2.0"
 amqp-client = "5.31.0"
 h2 = "2.4.240"
 # compileOnly APIs for the framework wiring examples only — never library dependencies
@@ -14,6 +15,8 @@ jackson = "2.22.0"
 [libraries]
 # Used by buildSrc to put the Kotlin plugin on the convention-plugin classpath
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+# Generates the javadoc jars Maven Central requires, from the modules' KDoc
+dokka-gradle-plugin = { module = "org.jetbrains.dokka:dokka-gradle-plugin", version.ref = "dokka" }
 amqp-client = { module = "com.rabbitmq:amqp-client", version.ref = "amqp-client" }
 h2 = { module = "com.h2database:h2", version.ref = "h2" }
 liquibase-core = { module = "org.liquibase:liquibase-core", version = "5.0.3" }

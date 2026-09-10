@@ -17,16 +17,46 @@
 plugins {
     id("nightjar.kotlin-library")
     `maven-publish`
+    signing
+    // Javadoc-format API docs generated from the modules' KDoc
+    id("org.jetbrains.dokka-javadoc")
 }
 
 java {
     withSourcesJar()
 }
 
+// Maven Central requires a javadoc jar alongside every non-pom artifact.
+val javadocJar by tasks.registering(Jar::class) {
+    archiveClassifier = "javadoc"
+    from(tasks.named("dokkaGeneratePublicationJavadoc"))
+}
+
+// Maven Central requires a PGP signature (.asc) beside every published file.
+// The release workflow supplies the key as ORG_GRADLE_PROJECT_signingKey /
+// ...signingPassword; without them signing is skipped entirely, so ordinary
+// builds, publishToMavenLocal and the staging publish are unaffected.
+signing {
+    // `filter` matters: CI passes the secret unconditionally, so on a run without
+    // it the property is present-but-blank. Blank must count as absent, or the
+    // build would try to sign with an empty key.
+    val signingKey = providers.gradleProperty("signingKey").map(String::trim).filter(String::isNotEmpty)
+    val signingPassword = providers.gradleProperty("signingPassword")
+    isRequired = signingKey.isPresent
+    if (signingKey.isPresent) {
+        useInMemoryPgpKeys(signingKey.get(), signingPassword.getOrElse(""))
+    }
+}
+
 publishing {
     publications {
         create<MavenPublication>("maven") {
             from(components["java"])
+            artifact(javadocJar)
+
+            if (project.extensions.getByType<SigningExtension>().isRequired) {
+                signing.sign(this)
+            }
 
             pom {
                 name = project.name
@@ -42,6 +72,7 @@ publishing {
                 developers {
                     developer {
                         id = "lorands"
+                        name = "Lorand Somogyi"
                         url = "https://github.com/lorands"
                     }
                 }

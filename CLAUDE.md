@@ -110,10 +110,41 @@ Packages will not overwrite a version once published. Local equivalent:
 ./gradlew build publishAllPublicationsToStagingRepository -Pversion=1.2.3
 ```
 
-Publishing to GitHub Packages needs `githubPackagesUsername`/`githubPackagesPassword`
-Gradle properties (the workflow passes them as `ORG_GRADLE_PROJECT_*` from
-`github.actor` and the job's `GITHUB_TOKEN`, with `packages: write`). Gradle
-only requires them when a task publishing there is in the graph, so ordinary
-builds and the staging publish need no credentials.
+A tag release goes to three places: **Maven Central** (primary), **GitHub
+Packages**, and the GitHub release's attached jars.
+
+Group id is `com.lorands.nightjar`, verified on Central through the
+`com.lorands` namespace (DNS TXT on lorands.com; the namespace covers every
+`com.lorands.*` subgroup). Kotlin packages stay `dev.nightjar.*` — package
+names and Maven coordinates are independent, and renaming them would break
+every consumer import for no gain. Don't "fix" the mismatch.
+
+Central's mandatory extras, all wired into `nightjar.published`:
+
+- a **javadoc jar** per module, generated from KDoc by Dokka (`javadocJar`)
+- a **sources jar** (`withSourcesJar()`)
+- a **PGP signature** beside every file, via the `signing` plugin with an
+  in-memory key
+- POM `name`/`description`/`url`/`licenses`/`developers`/`scm` — all present;
+  don't drop any
+
+Credentials are all optional-by-absence, so ordinary builds,
+`publishToMavenLocal` and the staging publish need none:
+
+| Secret | Used for |
+|---|---|
+| `SIGNING_KEY` / `SIGNING_PASSWORD` | armored PGP key; a *blank* key counts as absent (CI always passes the env) |
+| `CENTRAL_USERNAME` / `CENTRAL_PASSWORD` | Central portal user token |
+| `githubPackagesUsername`/`Password` | from `github.actor` + `GITHUB_TOKEN`, needs `packages: write` |
+
+The Central upload is a plain `curl` of the signed staging repo zipped as a
+bundle (`maven-metadata.xml` excluded — Central generates its own), posted to
+`central.sonatype.com/api/v1/publisher/upload` with
+`publishingType=AUTOMATIC`, then polled to `PUBLISHED`. No third-party
+publishing plugin.
+
+**A Maven Central release is permanent**: a version can never be replaced or
+removed, and AUTOMATIC means no human gate. The hermetic build is the only
+thing between a tag and a permanent artifact.
 
 GitHub Action versions are pinned to major tags and should be kept current.

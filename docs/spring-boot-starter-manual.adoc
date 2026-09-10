@@ -18,7 +18,7 @@ Baseline Spring Boot 3.5; Boot 4 verified continuously by the
 [source,kotlin]
 ----
 // build.gradle.kts
-implementation("dev.nightjar:nightjar-spring-boot-starter:0.1.0-SNAPSHOT")
+implementation("com.lorands.nightjar:nightjar-spring-boot-starter:<version>")
 ----
 
 [source,kotlin]

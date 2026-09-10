@@ -2,8 +2,8 @@ package dev.nightjar.domainevent.spi
 
 /**
  * Adapts the host application's transaction management — the only bridge
- * nightjar needs to it. Wrap [action] in a new transaction: commit on normal
- * return, roll back on exception (which must propagate).
+ * nightjar needs to it. Wrap the action passed to [run] in a new transaction:
+ * commit on normal return, roll back on exception (which must propagate).
  *
  * Event processing runs through this: ALL asynchronous listeners of one event
  * plus the outbox delete execute as a single transaction — a failing listener

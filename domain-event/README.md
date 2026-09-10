@@ -10,10 +10,10 @@ at-least-once to asynchronous listeners, with timed retries and suspension.
 
 ```kotlin
 dependencies {
-    implementation("dev.nightjar:domain-event:0.1.0-SNAPSHOT")
+    implementation("com.lorands.nightjar:domain-event:<version>")
     // pick a store + transport, or use the bundled in-memory ones:
-    implementation("dev.nightjar:domain-event-jdbc:0.1.0-SNAPSHOT")
-    implementation("dev.nightjar:domain-event-rabbitmq:0.1.0-SNAPSHOT")
+    implementation("com.lorands.nightjar:domain-event-jdbc:<version>")
+    implementation("com.lorands.nightjar:domain-event-rabbitmq:<version>")
 }
 ```
 

@@ -17,10 +17,10 @@ really are:
 
 ```kotlin
 dependencies {
-    implementation("dev.nightjar:migrations:0.1.0-SNAPSHOT")
-    implementation("dev.nightjar:migrations-jdbc:0.1.0-SNAPSHOT")      // JDBC store
+    implementation("com.lorands.nightjar:migrations:<version>")
+    implementation("com.lorands.nightjar:migrations-jdbc:<version>")      // JDBC store
     // deploy-time only (init container / CLI):
-    implementation("dev.nightjar:migrations-liquibase:0.1.0-SNAPSHOT")
+    implementation("com.lorands.nightjar:migrations-liquibase:<version>")
 }
 ```
 

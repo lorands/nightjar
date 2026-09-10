@@ -4,32 +4,31 @@
 :icons: font
 :source-highlighter: rouge
 :sectnums:
-:nightjar-version: 0.1.2
+:group: com.lorands.nightjar
+:v: <version>
 :repo: lorands/nightjar
 
-How to get nightjar's jars into a Gradle or Maven build. Artifacts are
-published to *GitHub Packages* and attached to every
-https://github.com/lorands/nightjar/releases[GitHub release]; nightjar is not
-on Maven Central yet.
+How to get nightjar's jars into a Gradle or Maven build.
 
-Group id is always `dev.nightjar`, and every module shares one version.
+Artifacts are published to *Maven Central* — the primary route, needing no
+credentials and no extra repository declaration. Every release is also pushed to
+*GitHub Packages* and attached to the
+https://github.com/lorands/nightjar/releases[GitHub release].
+
+The group id is `{group}` and every module shares one version. Substitute the
+current version — shown by the Maven Central badge in the README — wherever this
+manual writes `{v}`.
 
 [NOTE]
-.Reading from GitHub Packages requires authentication
+.Group id versus package name
 ====
-GitHub's Maven registry demands credentials for *every* request, including
-reads of packages in a public repository. There is no anonymous access and no
-way for the publisher to enable it — this is a GitHub limitation, not a
-nightjar decision.
+The Maven group id is `{group}`; the Kotlin packages are `dev.nightjar.*`. That
+is deliberate and legal — a package name and a Maven coordinate are independent
+— so your imports read `dev.nightjar.domainevent.DomainEventBus` while your
+build file says `{group}:domain-event`.
 
-This surprises people because GitHub's registries do not behave alike: public
-images pull anonymously from the *container* registry (`ghcr.io`), so the
-reasonable assumption is that a public Maven package behaves the same way. It
-does not. An unauthenticated request for a package that exists returns
-`401 Unauthorized`, exactly like one for a package that does not.
-
-If you cannot or would rather not hand a token to your build, use the
-<<offline,release-asset repository>> instead: it needs no account at all.
+Releases up to 0.1.2 predate Maven Central and used the group id `dev.nightjar`.
+They exist only in GitHub Packages.
 ====
 
 == Which modules do you need
@@ -83,19 +82,106 @@ On Spring Boot, take the starter alone and add `domain-event-rabbitmq` or
 `migrations-liquibase` only if you want those (the starter treats both as
 optional and auto-configures them when present).
 
-== Getting a token
+== Maven Central
+
+Nothing to configure beyond the dependency itself: `mavenCentral()` is already
+in essentially every build, and Maven uses Central by default.
+
+=== Gradle (Kotlin DSL)
+
+[source,kotlin,subs="attributes+"]
+----
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation("{group}:domain-event:{v}")
+    implementation("{group}:domain-event-jdbc:{v}")
+}
+----
+
+=== Gradle (Groovy DSL)
+
+[source,groovy,subs="attributes+"]
+----
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation '{group}:domain-event:{v}'
+    implementation '{group}:domain-event-jdbc:{v}'
+}
+----
+
+=== Gradle version catalog
+
+.gradle/libs.versions.toml
+[source,toml,subs="attributes+"]
+----
+[versions]
+nightjar = "{v}"
+
+[libraries]
+nightjar-domain-event = { module = "{group}:domain-event", version.ref = "nightjar" }
+nightjar-domain-event-jdbc = { module = "{group}:domain-event-jdbc", version.ref = "nightjar" }
+nightjar-coordination-jdbc = { module = "{group}:coordination-jdbc", version.ref = "nightjar" }
+nightjar-spring-boot-starter = { module = "{group}:nightjar-spring-boot-starter", version.ref = "nightjar" }
+----
+
+Then `implementation(libs.nightjar.domain.event)` and friends.
+
+=== Maven
+
+[source,xml,subs="attributes+"]
+----
+<dependency>
+  <groupId>{group}</groupId>
+  <artifactId>domain-event</artifactId>
+  <version>{v}</version>
+</dependency>
+<dependency>
+  <groupId>{group}</groupId>
+  <artifactId>domain-event-jdbc</artifactId>
+  <version>{v}</version>
+</dependency>
+----
+
+=== Verifying signatures
+
+Every artifact is signed. To check one by hand:
+
+[source,bash,subs="attributes+"]
+----
+gpg --verify domain-event-{v}.jar.asc domain-event-{v}.jar
+----
+
+Gradle can enforce this for the whole build with dependency verification
+(`gradle/verification-metadata.xml`); see the Gradle documentation on verifying
+dependencies.
+
+== GitHub Packages
+
+An alternative to Central, carrying the same artifacts. There is rarely a reason
+to prefer it — Central needs no credentials and this does.
+
+[WARNING]
+.GitHub Packages requires a token even to read
+====
+GitHub's Maven registry authenticates *every* request, including reads of
+packages in a public repository. There is no anonymous access and no way for the
+publisher to enable it.
+
+This surprises people because GitHub's registries do not behave alike: public
+images pull anonymously from the *container* registry (`ghcr.io`), so the
+reasonable assumption is that a public Maven package behaves the same way. It
+does not. An unauthenticated request for a package that exists returns
+`401 Unauthorized`, exactly like one for a package that does not.
+====
 
 Create a https://github.com/settings/tokens[personal access token (classic)]
-with the *`read:packages`* scope. No other scope is needed to consume
-packages, and for a public repository the token grants nothing beyond what is
-already public.
-
-Keep it out of your build files — the sections below put it in your per-user
-Gradle or Maven configuration, outside the project.
-
-== Gradle
-
-=== Kotlin DSL
+with the *`read:packages`* scope.
 
 .build.gradle.kts
 [source,kotlin,subs="attributes+"]
@@ -111,14 +197,8 @@ repositories {
         }
     }
 }
-
-dependencies {
-    implementation("dev.nightjar:domain-event:{nightjar-version}")
-    implementation("dev.nightjar:domain-event-jdbc:{nightjar-version}")
-}
 ----
-<1> Read from `~/.gradle/gradle.properties`, never from a file in the
-    repository.
+<1> Read from `~/.gradle/gradle.properties`, never from a file in the repository.
 
 .~/.gradle/gradle.properties
 [source,properties]
@@ -127,71 +207,8 @@ gpr.user=your-github-username
 gpr.token=ghp_your_token_with_read_packages
 ----
 
-=== Groovy DSL
-
-.build.gradle
-[source,groovy,subs="attributes+"]
-----
-repositories {
-    mavenCentral()
-    maven {
-        name = 'nightjar'
-        url = 'https://maven.pkg.github.com/{repo}'
-        credentials {
-            username = providers.gradleProperty('gpr.user').get()
-            password = providers.gradleProperty('gpr.token').get()
-        }
-    }
-}
-
-dependencies {
-    implementation 'dev.nightjar:domain-event:{nightjar-version}'
-    implementation 'dev.nightjar:domain-event-jdbc:{nightjar-version}'
-}
-----
-
-=== Credentials from the environment
-
-Useful in CI, where a properties file is awkward. Gradle maps the environment
-variable `ORG_GRADLE_PROJECT_<name>` onto the Gradle property `<name>`, so with
-a repository named `nightjar` you can also use Gradle's built-in credential
-handling and set nothing in the build file:
-
-[source,kotlin,subs="attributes+"]
-----
-maven {
-    name = "nightjar"                                  // <1>
-    url = uri("https://maven.pkg.github.com/{repo}")
-    credentials(PasswordCredentials::class)
-}
-----
-<1> The name selects the property pair: `nightjarUsername` / `nightjarPassword`,
-    supplied in CI as `ORG_GRADLE_PROJECT_nightjarUsername` and
-    `ORG_GRADLE_PROJECT_nightjarPassword`.
-
-Gradle resolves these lazily, so a build that does not touch the repository
-never demands them, and a missing one fails with a message naming the property
-rather than an HTTP error.
-
-=== Version catalog
-
-.gradle/libs.versions.toml
-[source,toml,subs="attributes+"]
-----
-[versions]
-nightjar = "{nightjar-version}"
-
-[libraries]
-nightjar-domain-event = { module = "dev.nightjar:domain-event", version.ref = "nightjar" }
-nightjar-domain-event-jdbc = { module = "dev.nightjar:domain-event-jdbc", version.ref = "nightjar" }
-nightjar-coordination-jdbc = { module = "dev.nightjar:coordination-jdbc", version.ref = "nightjar" }
-nightjar-spring-boot-starter = { module = "dev.nightjar:nightjar-spring-boot-starter", version.ref = "nightjar" }
-----
-
-== Maven
-
-Maven needs the repository *and* a matching `<server>` entry — they are linked
-by id, and credentials never live in the POM.
+For Maven, the repository and a matching `<server>` entry are linked by id, and
+credentials never live in the POM:
 
 .~/.m2/settings.xml
 [source,xml]
@@ -206,7 +223,8 @@ by id, and credentials never live in the POM.
   </servers>
 </settings>
 ----
-<1> Must match the `<repository><id>` below exactly.
+<1> Must match the `<repository><id>` in your POM exactly. Maven links them by
+id and makes an anonymous request — which fails — when they differ.
 
 .pom.xml
 [source,xml,subs="attributes+"]
@@ -215,80 +233,57 @@ by id, and credentials never live in the POM.
   <repository>
     <id>nightjar</id>
     <url>https://maven.pkg.github.com/{repo}</url>
-    <releases><enabled>true</enabled></releases>
     <snapshots><enabled>false</enabled></snapshots>     <!--1-->
   </repository>
 </repositories>
-
-<dependencies>
-  <dependency>
-    <groupId>dev.nightjar</groupId>
-    <artifactId>domain-event</artifactId>
-    <version>{nightjar-version}</version>
-  </dependency>
-  <dependency>
-    <groupId>dev.nightjar</groupId>
-    <artifactId>domain-event-jdbc</artifactId>
-    <version>{nightjar-version}</version>
-  </dependency>
-</dependencies>
 ----
 <1> Only tagged releases are published; there are no snapshots in the registry.
 
-To keep the repository out of every POM, move it into a `<profile>` in
-`settings.xml` with `<activeProfiles>` instead — same `<id>`, same effect,
-project files stay clean.
+=== Credentials from the environment
 
-== Continuous integration
+Gradle maps `ORG_GRADLE_PROJECT_<name>` onto the Gradle property `<name>`, which
+suits CI better than a properties file. With a named repository you can use
+Gradle's built-in credential handling and put nothing in the build file:
 
-=== GitHub Actions
-
-Inside *this* repository, the automatic `GITHUB_TOKEN` is enough:
-
-[source,yaml]
+[source,kotlin,subs="attributes+"]
 ----
-permissions:
-  contents: read
-  packages: read
-
-steps:
-  - run: ./gradlew build
-    env:
-      ORG_GRADLE_PROJECT_nightjarUsername: ${{ github.actor }}
-      ORG_GRADLE_PROJECT_nightjarPassword: ${{ secrets.GITHUB_TOKEN }}
+maven {
+    name = "nightjar"                                  // <1>
+    url = uri("https://maven.pkg.github.com/{repo}")
+    credentials(PasswordCredentials::class)
+}
 ----
+<1> The name selects the property pair: `nightjarUsername` / `nightjarPassword`,
+    supplied in CI as `ORG_GRADLE_PROJECT_nightjarUsername` and
+    `ORG_GRADLE_PROJECT_nightjarPassword`.
+
+Gradle resolves these lazily, so a build that never touches the repository never
+demands them, and a missing one fails naming the property rather than with an
+HTTP error.
 
 [IMPORTANT]
+.GitHub Actions, from a different repository
 ====
-From a *different* repository this does not work. A workflow's `GITHUB_TOKEN`
-can only read packages belonging to its own repository, so consuming nightjar
-elsewhere needs either:
+A workflow's automatic `GITHUB_TOKEN` can only read packages belonging to *its
+own* repository. Consuming nightjar from GitHub Packages elsewhere needs either
+a personal access token stored as a repository secret, or the package owner
+granting that repository access under the package's *Manage Actions access*
+settings. Neither in place produces a bare `401`, not a permissions message.
 
-* a personal access token with `read:packages`, stored as a repository secret
-  (`secrets.NIGHTJAR_TOKEN`), or
-* the package owner granting that repository access, under the package's
-  *Manage Actions access* settings.
-
-The error when neither is in place is a `401 Unauthorized`, not a permissions
-message — see <<troubleshooting>>.
+Using Maven Central sidesteps this entirely.
 ====
-
-=== Other CI systems
-
-Store the token as a secret and expose it as `ORG_GRADLE_PROJECT_nightjarPassword`
-(Gradle) or write it into `~/.m2/settings.xml` during the job (Maven).
 
 [[offline]]
-== Without a token: the release-asset repository
+== Release assets, air-gapped builds and mirrors
 
 Every release attaches `nightjar-<version>-maven-repo.zip` — a complete Maven
-repository with POMs, jars, sources jars and checksums. Downloading it needs no
-account, and neither does building against it.
+repository with POMs, jars, sources jars, javadoc jars, signatures and
+checksums. Downloading it needs no account.
 
 [source,bash,subs="attributes+"]
 ----
-curl -LO https://github.com/{repo}/releases/download/v{nightjar-version}/nightjar-{nightjar-version}-maven-repo.zip
-unzip nightjar-{nightjar-version}-maven-repo.zip -d ~/nightjar-repo
+curl -LO https://github.com/{repo}/releases/download/v{v}/nightjar-{v}-maven-repo.zip
+unzip nightjar-{v}-maven-repo.zip -d ~/nightjar-repo
 ----
 
 Gradle:
@@ -311,47 +306,49 @@ Maven:
 </repository>
 ----
 
-This also suits air-gapped builds and internal mirrors: unpack the zip into an
-existing Nexus/Artifactory hosted repository and nightjar resolves like any
-other dependency, for everyone, with no tokens.
+Transitive resolution behaves exactly as it does from a remote repository. This
+is the route for air-gapped builds and internal mirrors: unpack the zip into a
+Nexus or Artifactory hosted repository and nightjar resolves like any other
+dependency, for everyone.
 
 == Building from source
 
-[source,bash]
+[source,bash,subs="attributes+"]
 ----
-git clone https://github.com/lorands/nightjar.git && cd nightjar
+git clone https://github.com/{repo}.git && cd nightjar
 ./gradlew publishToMavenLocal
 ----
 
 Installs every module into `~/.m2/repository` as `0.1.0-SNAPSHOT`. Add
-`mavenLocal()` (Gradle) — Maven finds it without configuration.
-
-Pass `-Pversion=<x.y.z>` to install under a specific version instead.
+`mavenLocal()` in Gradle; Maven finds it without configuration. Pass
+`-Pversion=<x.y.z>` to install under a specific version instead.
 
 [[troubleshooting]]
 == Troubleshooting
 
-`401 Unauthorized`::
-No credentials reached the registry, or the token lacks `read:packages`.
-GitHub returns 401 rather than 404 for artifacts that do not exist, so this is
-also what a wrong version or artifact id looks like. Check the token scope
-first, then the coordinates.
+`Could not find {group}:...` *from Maven Central*::
+The version may not have propagated yet — Central's own indexes update within
+minutes of publication, but search and third-party mirrors can lag by a couple
+of hours. Check
+https://central.sonatype.com/search?namespace={group}[the namespace listing] for
+what is actually published.
 
-`Could not find dev.nightjar:...`::
-The repository is not declared in the build, or Gradle's
-`dependencyResolutionManagement` in `settings.gradle.kts` is overriding
-project repositories — declare it there instead of in `build.gradle.kts`.
+`Could not find {group}:...` *generally*::
+Check the group id: releases up to 0.1.2 used `dev.nightjar` and were never on
+Central. Also confirm `mavenCentral()` is present and that Gradle's
+`dependencyResolutionManagement` in `settings.gradle.kts` is not overriding
+project repositories.
 
-`Received status code 401 ... from server: Unauthorized` *in GitHub Actions*::
-A cross-repository build using the automatic `GITHUB_TOKEN`. That token cannot
-read another repository's packages; use a PAT or grant the repository access to
-the package.
+`401 Unauthorized` *from GitHub Packages*::
+No credentials reached the registry, or the token lacks `read:packages`. GitHub
+returns 401 rather than 404 for artifacts that do not exist, so this is also
+what a wrong version or artifact id looks like. Check the token scope first,
+then the coordinates.
 
-Maven ignores the credentials::
-The `<server><id>` and `<repository><id>` do not match. Maven links them by id
-and silently makes an anonymous request when they differ.
+Maven ignores the GitHub Packages credentials::
+The `<server><id>` and `<repository><id>` do not match.
 
-A version that used to resolve now 401s::
-Published versions are immutable and are never removed by the release pipeline,
-but a package version *can* be deleted by hand in the GitHub UI. Check the
-package's version list.
+Signature verification fails::
+Import the signing key from a public keyserver first
+(`gpg --keyserver keyserver.ubuntu.com --recv-keys <key-id>`); the key id is in
+the `.asc` file's output when verification runs without it.

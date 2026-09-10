@@ -7,7 +7,13 @@ name: Release
 #
 # Pre-release tags (v1.2.3-rc.1) are marked as pre-releases automatically.
 # Use "Run workflow" for a dry run: it builds and uploads the artifacts for
-# inspection without creating a release or publishing to GitHub Packages.
+# inspection without publishing anywhere or creating a release.
+#
+# Required secrets for a tag release:
+#   SIGNING_KEY       ASCII-armored PGP private key (gpg --armor --export-secret-keys)
+#   SIGNING_PASSWORD  its passphrase, empty if the key has none
+#   CENTRAL_USERNAME  Maven Central portal user token — name half
+#   CENTRAL_PASSWORD  Maven Central portal user token — secret half
 
 on:
   push:
@@ -78,6 +84,11 @@ jobs:
       # H2 and mock tests. Integration tests need real services and are not part
       # of it by design.
       - name: Build and stage artifacts
+        env:
+          # Absent on a dry run, which leaves the artifacts unsigned — the
+          # signing config treats a blank key as no key.
+          ORG_GRADLE_PROJECT_signingKey: ${{ secrets.SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.SIGNING_PASSWORD }}
         run: ./gradlew build publishAllPublicationsToStagingRepository -Pversion="${{ steps.version.outputs.version }}"
 
       - name: Collect release assets
@@ -117,6 +128,50 @@ jobs:
           ORG_GRADLE_PROJECT_githubPackagesUsername: ${{ github.actor }}
           ORG_GRADLE_PROJECT_githubPackagesPassword: ${{ secrets.GITHUB_TOKEN }}
         run: ./gradlew publishAllPublicationsToGithubPackagesRepository -Pversion="${{ steps.version.outputs.version }}"
+
+      # Maven Central is permanent: a published version can never be replaced or
+      # removed. publishingType=AUTOMATIC releases as soon as validation passes,
+      # with no human gate — so the build above is the only thing standing
+      # between a tag and a permanent artifact.
+      - name: Publish to Maven Central
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # Central generates its own maven-metadata; shipping ours trips validation.
+          (cd build/staging-repo && zip -qr "$GITHUB_WORKSPACE/central-bundle.zip" . -x '*maven-metadata.xml*')
+          echo "bundle: $(du -h central-bundle.zip | cut -f1)"
+
+          AUTH=$(printf '%s:%s' "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 -w0)
+
+          DEPLOYMENT=$(curl -sS --fail-with-body \
+            -H "Authorization: Bearer $AUTH" \
+            -F "bundle=@central-bundle.zip" \
+            "https://central.sonatype.com/api/v1/publisher/upload?name=nightjar-$VERSION&publishingType=AUTOMATIC")
+          echo "deployment id: $DEPLOYMENT"
+
+          for _ in $(seq 1 60); do
+            STATE=$(curl -sS -X POST -H "Authorization: Bearer $AUTH" \
+              "https://central.sonatype.com/api/v1/publisher/status?id=$DEPLOYMENT" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("deploymentState","UNKNOWN"))')
+            echo "  $STATE"
+            case "$STATE" in
+              PUBLISHED)
+                echo "Published to Maven Central as $VERSION" >> "$GITHUB_STEP_SUMMARY"
+                exit 0 ;;
+              FAILED)
+                echo "::error::Maven Central rejected deployment $DEPLOYMENT"
+                exit 1 ;;
+            esac
+            sleep 20
+          done
+
+          # Still in flight rather than broken — surface it without failing the release.
+          echo "::warning::Deployment $DEPLOYMENT still in progress; check https://central.sonatype.com/publishing/deployments"
 
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/v')

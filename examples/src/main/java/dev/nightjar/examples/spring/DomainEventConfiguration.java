@@ -27,8 +27,8 @@ import javax.sql.DataSource;
  *
  * <p>Gradle dependencies of the host application:</p>
  * <pre>
- * implementation("dev.nightjar:domain-event-jdbc:0.1.0-SNAPSHOT")
- * implementation("dev.nightjar:domain-event-rabbitmq:0.1.0-SNAPSHOT")
+ * implementation("com.lorands.nightjar:domain-event-jdbc:<version>")
+ * implementation("com.lorands.nightjar:domain-event-rabbitmq:<version>")
  * </pre>
  *
  * <p>The nightjar libraries themselves have no Spring dependency — this class

@@ -1,6 +1,7 @@
 # nightjar
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Maven Central](https://img.shields.io/maven-central/v/com.lorands.nightjar/domain-event.svg?label=maven%20central)](https://central.sonatype.com/search?namespace=com.lorands.nightjar)
 [![Release](https://img.shields.io/github/v/release/lorands/nightjar?sort=semver)](https://github.com/lorands/nightjar/releases)
 
 Minimalist, framework-free DDD building blocks for the JVM.
@@ -50,92 +51,45 @@ Java looks just like you'd hope — see [examples](examples/).
 
 ## Installation
 
-Not on Maven Central yet. Every tagged release goes to **GitHub Packages** and
-to [GitHub Releases](https://github.com/lorands/nightjar/releases).
-
-> **GitHub Packages requires a token even to read**, and this repository being
-> public does not change that: the Maven registry authenticates every request,
-> and the publisher cannot enable anonymous access. (GitHub's *container*
-> registry does allow anonymous pulls — the Maven one does not.) Consumers need
-> a personal access token with the `read:packages` scope. If that is not
-> acceptable, the [release asset](#release-assets--no-token-required) below
-> needs no account at all.
-
-Full details — module coordinates, Groovy DSL, version catalogs, CI recipes and
-troubleshooting — are in the
-**[installation manual](docs/installation-manual.adoc)**.
-
-### Gradle
+Artifacts are published to **Maven Central** under the `com.lorands.nightjar`
+group id — no credentials, no extra repository:
 
 ```kotlin
-repositories {
-    mavenCentral()
-    maven {
-        url = uri("https://maven.pkg.github.com/lorands/nightjar")
-        credentials {
-            username = providers.gradleProperty("gpr.user").get()
-            password = providers.gradleProperty("gpr.token").get()
-        }
-    }
-}
-
 dependencies {
-    implementation("dev.nightjar:domain-event:0.1.2")
-    implementation("dev.nightjar:domain-event-jdbc:0.1.2")
+    implementation("com.lorands.nightjar:domain-event:<version>")
+    implementation("com.lorands.nightjar:domain-event-jdbc:<version>")
     // or, on Spring Boot, the whole surface at once:
-    implementation("dev.nightjar:nightjar-spring-boot-starter:0.1.2")
+    implementation("com.lorands.nightjar:nightjar-spring-boot-starter:<version>")
 }
 ```
 
-with `gpr.user` / `gpr.token` in `~/.gradle/gradle.properties`.
-
-### Maven
-
 ```xml
-<repository>
-  <id>nightjar</id>
-  <url>https://maven.pkg.github.com/lorands/nightjar</url>
-</repository>
-
 <dependency>
-  <groupId>dev.nightjar</groupId>
+  <groupId>com.lorands.nightjar</groupId>
   <artifactId>domain-event</artifactId>
-  <version>0.1.2</version>
+  <version><!-- version --></version>
 </dependency>
 ```
 
-with a matching `<server><id>nightjar</id>` in `~/.m2/settings.xml` carrying
-your username and token.
+Every release also goes to
+[GitHub Packages](docs/installation-manual.adoc#_github_packages) and attaches
+its jars to the
+[GitHub release](https://github.com/lorands/nightjar/releases). Module
+coordinates, Groovy DSL, version catalogs, CI recipes and troubleshooting are
+in the **[installation manual](docs/installation-manual.adoc)**.
 
-### Release assets — no token required
-
-Every release attaches each module's jar and sources jar, plus
-`nightjar-<version>-maven-repo.zip`: a complete Maven repository with POMs and
-checksums. Unpack it and point a repository at the directory — transitive
-resolution works exactly as it does from the registry, with no token anywhere:
-
-```kotlin
-repositories {
-    mavenCentral()
-    maven { url = uri("file:///path/to/unpacked-maven-repo") }
-}
-```
-
-Transitive resolution behaves exactly as it does from the registry: the starter
-pulls all six nightjar modules it depends on, with no credentials anywhere.
-This is also the route for air-gapped builds and internal Nexus/Artifactory
-mirrors — unpack the zip into a hosted repository and everyone resolves
-nightjar normally.
-
-Token-free public consumption is what Maven Central would solve; that is the
-next packaging step.
+> **Coordinates changed in the first Maven Central release.** Versions up to
+> 0.1.2 were published only to GitHub Packages, under the old `dev.nightjar`
+> group id. Kotlin packages remain `dev.nightjar.*` and are unaffected — a
+> package name and a Maven group id are independent, and renaming 105 files
+> would break every import for no benefit.
 
 ### From source
 
 ```bash
 git clone https://github.com/lorands/nightjar.git && cd nightjar
 ./gradlew build               # verifies everything hermetically
-./gradlew publishToMavenLocal # installs dev.nightjar:* into ~/.m2
+./gradlew publishToMavenLocal # installs com.lorands.nightjar:* into ~/.m2
 ```
 
 Requirements to build: JDK 17+ (the Gradle daemon provisions what it needs).
@@ -167,8 +121,9 @@ devbox services up          # PostgreSQL on :6543, RabbitMQ on :5672
 
 Releases are tag-driven. Pushing a semver tag runs
 [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds,
-runs the hermetic test suite, publishes every shipping module to GitHub
-Packages, and creates a GitHub release with the jars and sources jars attached:
+runs the hermetic test suite, signs the artifacts, publishes every shipping
+module to Maven Central and GitHub Packages, and creates a GitHub release with
+the jars attached:
 
 ```bash
 git tag v1.2.3 && git push origin v1.2.3
@@ -184,6 +139,15 @@ already in the registry cannot be overwritten.
 Modules applying the `nightjar.published` convention plugin are the ones that
 ship; `examples`, `native-smoke` and `spring-boot-compat-check` deliberately
 do not.
+
+**A Maven Central release is permanent** — a published version can never be
+replaced or removed, and this pipeline publishes automatically once Central's
+validation passes. The hermetic build is the only gate between a tag and a
+permanent artifact, so tag deliberately.
+
+Releasing needs four repository secrets: `SIGNING_KEY` and `SIGNING_PASSWORD`
+(the PGP key whose public half is on a keyserver), and `CENTRAL_USERNAME` /
+`CENTRAL_PASSWORD` (a Maven Central portal user token).
 
 ## License
 
