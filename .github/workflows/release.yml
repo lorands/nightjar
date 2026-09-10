@@ -85,10 +85,12 @@ jobs:
       # of it by design.
       - name: Build and stage artifacts
         env:
-          # Absent on a dry run, which leaves the artifacts unsigned — the
-          # signing config treats a blank key as no key.
-          ORG_GRADLE_PROJECT_signingKey: ${{ secrets.SIGNING_KEY }}
-          ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.SIGNING_PASSWORD }}
+          # Only a tag build gets the key in its environment at all. A dry run
+          # produces unsigned artifacts, which is what it is for — the signing
+          # config treats a blank key as no key. This keeps the private key out
+          # of every run that has no business signing anything.
+          ORG_GRADLE_PROJECT_signingKey: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.SIGNING_KEY || '' }}
+          ORG_GRADLE_PROJECT_signingPassword: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.SIGNING_PASSWORD || '' }}
         run: ./gradlew build publishAllPublicationsToStagingRepository -Pversion="${{ steps.version.outputs.version }}"
 
       - name: Collect release assets

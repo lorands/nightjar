@@ -149,6 +149,29 @@ irreversible one, so it gates the rest. GitHub Packages refuses to overwrite a
 version, so publishing there first would burn the version number whenever
 Central rejected the bundle. Don't reorder these.
 
+### Secret handling
+
+Secrets on a public repository are safe because of *what can reach them*, not
+because the repository is private:
+
+- The release workflow's only triggers are tag pushes and `workflow_dispatch`.
+  Neither is reachable from a fork. Never add `pull_request_target`,
+  `workflow_run`, or `issue_comment` here — those run with secret access and
+  are the standard way public repos leak credentials.
+- The signing key is bound to tag builds by expression, so it is absent from
+  the environment of every dry run.
+- No step ever echoes a secret. GitHub masks them in logs, but masking is
+  string matching — a transformed secret (base64, split, reversed) prints in
+  clear. Keep it that way.
+- Only official `actions/*` and `gradle/actions` are used. Every third-party
+  action added here can read the job's environment.
+
+Residual risk worth knowing: anyone with write access can publish a workflow
+that exfiltrates the secrets, and the Gradle build runs with the signing key
+in its environment, so a hostile build plugin or dependency could read it.
+Neither is fixable with configuration; both argue for keeping write access
+narrow and the build's plugin list short.
+
 The signing key's **public half must be resolvable from a keyserver** or Central
 rejects the bundle. `keyserver.ubuntu.com` propagates across a cluster over
 hours — check availability before tagging, since a partially propagated key
