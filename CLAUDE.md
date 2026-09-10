@@ -143,6 +143,17 @@ bundle (`maven-metadata.xml` excluded — Central generates its own), posted to
 `publishingType=AUTOMATIC`, then polled to `PUBLISHED`. No third-party
 publishing plugin.
 
+Central runs **first** of the three publish steps, deliberately: it is the most
+likely to fail (signature, keyserver and POM validation) and the only
+irreversible one, so it gates the rest. GitHub Packages refuses to overwrite a
+version, so publishing there first would burn the version number whenever
+Central rejected the bundle. Don't reorder these.
+
+The signing key's **public half must be resolvable from a keyserver** or Central
+rejects the bundle. `keyserver.ubuntu.com` propagates across a cluster over
+hours — check availability before tagging, since a partially propagated key
+fails validation intermittently.
+
 **A Maven Central release is permanent**: a version can never be replaced or
 removed, and AUTOMATIC means no human gate. The hermetic build is the only
 thing between a tag and a permanent artifact.
