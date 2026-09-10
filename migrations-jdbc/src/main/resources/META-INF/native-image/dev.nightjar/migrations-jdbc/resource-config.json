@@ -1,0 +1,12 @@
+{
+  "resources": {
+    "includes": [
+      {
+        "pattern": "\\Qdb/changelog/migrations-jdbc-changelog.xml\\E"
+      },
+      {
+        "pattern": "\\Qdev/nightjar/migrations/jdbc/data-migration-postgresql.sql\\E"
+      }
+    ]
+  }
+}

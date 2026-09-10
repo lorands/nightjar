@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/main/.schema/devbox.schema.json",
+  "packages": [
+    "postgresql@17",
+    "rabbitmq-server@latest"
+  ],
+  "shell": {
+    "init_hook": [
+      ". ./devbox.d/env.sh"
+    ]
+  }
+}

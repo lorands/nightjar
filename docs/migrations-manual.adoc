@@ -1,0 +1,180 @@
+= nightjar migrations — User Manual
+:toc: left
+:toclevels: 3
+:icons: font
+:source-highlighter: rouge
+:sectnums:
+
+Migrations for JVM applications, framework-free, split into the two concerns
+they really are: *schema migrations* (DDL, deploy time) and *data migrations*
+(entity reprocessing, runtime).
+
+== Schema migrations
+
+=== Principles
+
+* *SQL stays SQL* — migrations are pristine `.sql` files; Liquibase changelogs
+  only reference (`sqlFile`) and track them. No XML change types, ever.
+* *Liquibase is a deploy-time tool* — only `migrations-liquibase` depends on
+  it; applications and library modules never carry it at runtime.
+* *Libraries contribute schema* — any module shipping the manifest convention
+  gets its tables created in the host application's database.
+
+=== The convention
+
+A contributing module ships three things on its classpath:
+
+[source]
+----
+META-INF/nightjar/migrations.properties      <1>
+db/changelog/<id>-changelog.xml              <2>
+<module's own package path>/*.sql            <3>
+----
+<1> `id=<module>`, `changelog=<classpath path>`, `order=<int, lower first>`
+<2> standard Liquibase changelog; changesets use `<sqlFile path="..."/>` only
+<3> the actual DDL — untransformed
+
+nightjar's own modules use it: `domain-event-jdbc` (order 100) contributes the
+outbox tables, `migrations-jdbc` (order 110) the data-migration queues. Your
+application can join in with its own manifest (the
+link:../examples/[examples module] does — order 500).
+
+=== Applying migrations
+
+[source,kotlin]
+----
+LiquibaseMigrator().migrate(jdbcUrl, username, password)  // discovers everything
+----
+
+or from a deploy step / init container:
+
+[source,bash]
+----
+java -cp <app-classpath> dev.nightjar.migrations.liquibase.Main "$NIGHTJAR_DB_URL"
+----
+
+The migrator synthesizes a master changelog `<include>`-ing every discovered
+changelog in manifest order and runs Liquibase `update`. Execution is tracked
+in `DATABASECHANGELOG`; re-running is a no-op (Cloud-Native: safe for every
+deploy, concurrent runs serialized by `DATABASECHANGELOGLOCK`).
+
+[NOTE]
+====
+Database-specific changesets carry `dbms="postgresql"` (etc.) — nightjar ships
+PostgreSQL SQL first; other databases mean adding a variant SQL file + a
+`dbms`-filtered changeset, never editing applied ones.
+====
+
+=== Evolving schemas
+
+Liquibase rules apply: never modify an applied changeset — add a new one
+(`<module>-2`, `<module>-3`, ...) referencing a new SQL file. Forward-only;
+no rollback blocks (a deliberate decision).
+
+== Data migrations
+
+Reprocess entities *by id, in batches, continuously* — the operational pattern
+for "we changed how X is stored/computed, now re-derive it for 2 million rows"
+without downtime.
+
+=== Model
+
+[source,kotlin]
+----
+val engine = DataMigrationEngine.builder()
+    .store(JdbcDataMigrationStore(dataSource, transactions))  // <1>
+    .transactionalRunner(transactions)                        // <2>
+    .build()
+
+engine.register("reindex-orders") { type, ids -> orderIndexer.reindex(ids) }  // <3>
+engine.start()
+
+engine.enqueue("reindex-orders", orderIds)                    // <4>
+engine.enqueueSequential("recalculate-balances", accountIds)  // <5>
+----
+<1> or `InMemoryDataMigrationStore` for tests/single-instance
+<2> each batch handler runs in its own transaction
+<3> explicit registration — one handler per type, no scanning
+<4> parallel mode: priority-ordered (lower first), batched, multi-instance
+<5> sequential mode: strict global insertion order
+
+=== Parallel mode semantics
+
+* Batches (default 200 ids) are *claimed atomically* with a claim token;
+  any number of instances poll concurrently and divide the work
+* Claims expire (default 10 min) — work from crashed instances is recovered
+* A failing batch is released (attempts counted) and *benched for the rest of
+  the poll*: other types keep processing, the failed type retries next poll
+* Rows are deleted after success → at-least-once, handlers must be idempotent
+
+=== Sequential mode semantics
+
+* One *global* queue ordered by insertion (`row_index`); batches never cross
+  a type boundary
+* Processing holds a cluster-wide type lock
+* A failing head **blocks the whole sequential queue** until it succeeds —
+  by design: strict order is the contract. Monitor your logs.
+
+=== Configuration reference
+
+[cols="1,1,2"]
+|===
+| Option | Default | Meaning
+
+| `store` | _required_ | `DataMigrationStore`
+| `transactionalRunner` | none | wraps each handler invocation
+| `pollInterval` | 5 s | poll cadence
+| `batchSize` | 200 | ids per parallel batch
+| `sequentialBatchSize` | 25 | ids per sequential batch
+| `maxBatchesPerPoll` | 250 | parallel batch cap per poll
+| `claimExpiry` | 10 min | abandoned-claim recovery threshold
+|===
+
+=== Composing with domain-event
+
+Enqueue work straight from a domain event with one listener:
+
+[source,kotlin]
+----
+bus.subscribe(SchemaUpgraded::class.java) { envelope ->
+    engine.enqueue("reindex-orders", envelope.event.affectedIds)
+}
+----
+
+The enqueue joins the listener's transaction — event processing and work
+queueing commit atomically.
+
+== Wiring
+
+* *Spring Boot*:
+  link:../examples/src/main/java/dev/nightjar/examples/spring/DataMigrationConfiguration.java[examples/spring/DataMigrationConfiguration.java]
+  — reuses the domain-event transaction beans
+* *Quarkus (CDI + JTA)*:
+  link:../examples/src/main/kotlin/dev/nightjar/examples/quarkus/DataMigrationProducers.kt[examples/quarkus/DataMigrationProducers.kt]
+* *Schema execution* belongs in an init container / deploy step in both cases;
+  migrate-on-startup is possible but couples boot time to migration time
+
+== GraalVM native image
+
+The runtime side (`migrations`, `migrations-jdbc` — the data-migration engine
+and manifest discovery) works in native images out of the box: nightjar ships
+resource metadata embedding the `META-INF/nightjar/migrations.properties`
+manifests and the changelog/SQL resources, and the engine uses no reflection.
+Verified by link:../native-smoke/[native-smoke] (`./gradlew :native-smoke:nativeRun`).
+
+`migrations-liquibase` is *deliberately* not native-supported: Liquibase is
+reflection-heavy, and the module is a deploy-time tool — run it on a JVM in an
+init container while your native application stays Liquibase-free. This is the
+intended Cloud-Native shape, not a limitation.
+
+== Operations
+
+[source,sql]
+----
+SELECT type, COUNT(*), MAX(attempts) FROM data_migration GROUP BY type;  -- backlog + problem types
+SELECT COUNT(*) FROM sequential_data_migration;                          -- sequential backlog
+SELECT * FROM databasechangelog ORDER BY dateexecuted DESC;              -- applied schema migrations
+----
+
+Design rationale and the alternatives rejected:
+link:migrations-design.md[migrations-design.md].

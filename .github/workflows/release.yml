@@ -1,0 +1,123 @@
+name: Release
+
+# Tag-driven releases. Push a semver tag and this builds, verifies, packages and
+# publishes a GitHub release with the jars attached:
+#
+#   git tag v1.2.3 && git push origin v1.2.3
+#
+# Pre-release tags (v1.2.3-rc.1) are marked as pre-releases automatically.
+# Use "Run workflow" for a dry run: it builds and uploads the artifacts for
+# inspection without creating a release.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build, no leading v (e.g. 1.2.3). Dry run — uploads artifacts, creates no release.'
+        required: true
+        default: '0.0.0-dryrun'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # creating the release and uploading its assets
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      # Java 25 runs the Gradle daemon (gradle/gradle-daemon-jvm.properties).
+      # The Java 17 library toolchain is auto-provisioned by the foojay resolver
+      # declared in settings.gradle.kts, and cached by setup-gradle.
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+
+          # https://semver.org - major.minor.patch with optional pre-release/build metadata
+          SEMVER='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+          if ! printf '%s' "$VERSION" | grep -Eq "$SEMVER"; then
+            echo "::error::'$VERSION' is not a semantic version"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing version $VERSION" >> "$GITHUB_STEP_SUMMARY"
+
+      # `build` is the hermetic gate: compiles every module and runs the unit,
+      # H2 and mock tests. Integration tests need real services and are not part
+      # of it by design.
+      - name: Build and stage artifacts
+        run: ./gradlew build publishAllPublicationsToStagingRepository -Pversion="${{ steps.version.outputs.version }}"
+
+      - name: Collect release assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+
+          # Flat jars (main + sources) for direct download off the release page
+          find build/staging-repo -name '*.jar' -exec cp -t release-assets {} +
+
+          # The same artifacts in Maven layout, with POMs and checksums: unzip it
+          # anywhere and point a `maven { url = ... }` repository at it
+          (cd build/staging-repo && zip -qr "$GITHUB_WORKSPACE/release-assets/nightjar-$VERSION-maven-repo.zip" .)
+
+          ls -lh release-assets
+          {
+            echo '### Artifacts'
+            echo '```'
+            ls release-assets
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts to the workflow run
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightjar-${{ steps.version.outputs.version }}
+          path: release-assets/
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          args=(--title "nightjar $VERSION" --generate-notes --verify-tag)
+          # anything after a hyphen is a pre-release identifier (rc, beta, ...)
+          case "$VERSION" in
+            *-*) args+=(--prerelease) ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" "${args[@]}" release-assets/*

@@ -1,0 +1,8 @@
+# Extra devbox services (postgresql comes from devbox's built-in plugin)
+version: "0.5"
+
+processes:
+  rabbitmq:
+    command: "rabbitmq-server"
+    availability:
+      restart: "on_failure"

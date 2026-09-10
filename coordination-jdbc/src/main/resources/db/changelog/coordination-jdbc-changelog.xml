@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  nightjar coordination-jdbc schema contribution.
+  The SQL lives untransformed in coordination-postgresql.sql (sqlFile) -
+  Liquibase only tracks and executes it.
+-->
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="coordination-jdbc-1" author="nightjar" dbms="postgresql">
+        <sqlFile path="dev/nightjar/coordination/jdbc/coordination-postgresql.sql"/>
+    </changeSet>
+
+</databaseChangeLog>

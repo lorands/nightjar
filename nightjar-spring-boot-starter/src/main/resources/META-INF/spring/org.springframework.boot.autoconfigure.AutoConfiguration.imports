@@ -1,0 +1,6 @@
+dev.nightjar.spring.NightjarTransactionAutoConfiguration
+dev.nightjar.spring.NightjarRabbitMqTransportAutoConfiguration
+dev.nightjar.spring.NightjarDomainEventAutoConfiguration
+dev.nightjar.spring.NightjarMigrationsAutoConfiguration
+dev.nightjar.spring.NightjarMigrationsAutoConfiguration$SchemaMigrationsOnStartup
+dev.nightjar.spring.NightjarCoordinationAutoConfiguration

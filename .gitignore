@@ -1,0 +1,16 @@
+# Build output
+.gradle/
+build/
+.kotlin/
+release-assets/
+
+# IDE
+.idea/
+*.iml
+local.properties
+
+# Local service state (devbox/Nix virtenv — machine-specific, not shareable)
+.devbox/
+
+# Per-developer tool settings
+.claude/settings.local.json

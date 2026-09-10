@@ -1,0 +1,12 @@
+{
+  "resources": {
+    "includes": [
+      {
+        "pattern": "\\Qdb/changelog/domain-event-jdbc-changelog.xml\\E"
+      },
+      {
+        "pattern": "\\Qdev/nightjar/domainevent/jdbc/domain-event-postgresql.sql\\E"
+      }
+    ]
+  }
+}

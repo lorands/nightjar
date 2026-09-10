@@ -1,0 +1,36 @@
+[versions]
+kotlin = "2.4.0"
+amqp-client = "5.31.0"
+h2 = "2.4.240"
+# compileOnly APIs for the framework wiring examples only — never library dependencies
+spring = "6.2.18"
+cdi-api = "4.1.0"
+transaction-api = "2.0.1"
+# the Spring Boot starter module (framework deps allowed THERE by design)
+spring-boot = "3.5.14"
+spring-boot4 = "4.0.6"
+jackson = "2.22.0"
+
+[libraries]
+# Used by buildSrc to put the Kotlin plugin on the convention-plugin classpath
+kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+amqp-client = { module = "com.rabbitmq:amqp-client", version.ref = "amqp-client" }
+h2 = { module = "com.h2database:h2", version.ref = "h2" }
+liquibase-core = { module = "org.liquibase:liquibase-core", version = "5.0.3" }
+postgresql = { module = "org.postgresql:postgresql", version = "42.7.11" }
+rabbitmq-mock = { module = "com.github.fridujo:rabbitmq-mock", version = "1.2.0" }
+spring-context = { module = "org.springframework:spring-context", version.ref = "spring" }
+spring-jdbc = { module = "org.springframework:spring-jdbc", version.ref = "spring" }
+spring-tx = { module = "org.springframework:spring-tx", version.ref = "spring" }
+cdi-api = { module = "jakarta.enterprise:jakarta.enterprise.cdi-api", version.ref = "cdi-api" }
+transaction-api = { module = "jakarta.transaction:jakarta.transaction-api", version.ref = "transaction-api" }
+spring-boot-autoconfigure = { module = "org.springframework.boot:spring-boot-autoconfigure", version.ref = "spring-boot" }
+spring-boot-starter-jdbc = { module = "org.springframework.boot:spring-boot-starter-jdbc", version.ref = "spring-boot" }
+spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test", version.ref = "spring-boot" }
+spring-boot4-starter-jdbc = { module = "org.springframework.boot:spring-boot-starter-jdbc", version.ref = "spring-boot4" }
+spring-boot4-starter-test = { module = "org.springframework.boot:spring-boot-starter-test", version.ref = "spring-boot4" }
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+graalvm-native = { id = "org.graalvm.buildtools.native", version = "1.1.1" }

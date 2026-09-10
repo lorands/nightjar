@@ -1,0 +1,178 @@
+= nightjar Spring Boot starter — User Manual
+:toc: left
+:toclevels: 3
+:icons: font
+:source-highlighter: rouge
+:sectnums:
+
+One dependency turns a Spring Boot application into a fully wired nightjar
+host: transactional outbox events, data migrations, locks, worker pools and
+scheduled timers — auto-configured against the application's `DataSource`
+and transaction manager.
+
+Baseline Spring Boot 3.5; Boot 4 verified continuously by the
+`spring-boot-compat-check` module.
+
+== Quickstart
+
+[source,kotlin]
+----
+// build.gradle.kts
+implementation("dev.nightjar:nightjar-spring-boot-starter:0.1.0-SNAPSHOT")
+----
+
+[source,kotlin]
+----
+@Component
+class OrderShippedListener : DomainEventListener<OrderShipped> {
+    override fun onEvent(envelope: EventEnvelope<OrderShipped>) { /* idempotent */ }
+}
+
+@Service
+class OrderService(private val publisher: DomainEventPublisher) {
+    @Transactional
+    fun ship(id: String) {
+        repository.save(order)
+        publisher.publish(OrderShipped(id))   // <1>
+    }
+}
+----
+<1> Atomic with the save: the outbox append joins the Spring-managed
+    transaction. Roll back and the event never existed. (Calling `publish()`
+    outside any transaction also works — the publisher opens one, keeping
+    sync listeners and the append atomic.)
+
+Schema: the nightjar tables come from the
+link:migrations-manual.adoc[migrations convention] — run
+`migrations-liquibase` in an init container, include the module changelogs in
+your own Liquibase setup, or set `nightjar.migrations.apply-on-startup=true`.
+
+== How the pieces are wired
+
+[cols="1,2"]
+|===
+| Bean | Behavior
+
+| `TransactionalConnectionSource`
+| `DataSourceUtils`-based: nightjar writes join the active `@Transactional` transaction
+
+| `TransactionalRunner`
+| `TransactionTemplate(REQUIRES_NEW)`: one transaction per event delivery (all async listeners + outbox delete together); each migration handler / scheduled job in its own transaction
+
+| `OutboxStore`
+| `JdbcOutboxStore` on your `DataSource` (in-memory fallback without one)
+
+| `EventTransport`
+| In-process by default; RabbitMQ when `transport=rabbitmq` and `domain-event-rabbitmq` is on the classpath
+
+| `EventSerializer`
+| Jackson, allowlist derived from subscribed listeners' event classes; uses your `ObjectMapper` bean when present
+
+| `DomainEventPublisher`
+| `NightjarDomainEvents` — assembles and starts the bus at lifecycle start (listeners may inject the publisher freely; no bean cycle). `publish()` runs under `REQUIRED` propagation: it joins an active `@Transactional` transaction, and opens its own for bare calls — sync listeners and the outbox append are atomic either way
+
+| `DataMigrationEngine` / `SimpleScheduler` / `ProcessLock` / `WorkerPool`
+| Property-toggled; `DataMigrationHandlerBean` and `ScheduledJobBean` beans auto-register
+|===
+
+Listener declaration: concrete classes implementing
+`DomainEventListener<E>` / `SyncDomainEventListener<E>`, or `@Bean` methods
+returning SAM lambdas (the event type is read from the method's return type).
+`@Order` drives invocation order.
+
+== Property reference
+
+[cols="2,1,2"]
+|===
+| Property | Default | Meaning
+
+3+| *nightjar.domain-event*
+| `enabled` | `true` | master switch
+| `transport` | `in-process` | `in-process` or `rabbitmq`
+| `poll-interval` | `500ms` | outbox relay cadence
+| `batch-size` | `200` | outbox records per poll
+| `redeliver-after` | `1h` | resend unclaimed SENT records
+| `worker-type` | `nightjar-domain-events` | worker type whose suspension is the cluster-wide stop (needs `worker.enabled=true`)
+| `rabbitmq.host/port/username/password` | localhost/5672/guest/guest | broker connection
+| `rabbitmq.queue` | `nightjar.domain.events` | event queue name
+| `rabbitmq.prefetch` | `10` | consumer prefetch
+
+3+| *nightjar.migrations*
+| `apply-on-startup` | `false` | run `LiquibaseMigrator` during startup (needs `migrations-liquibase`)
+| `data.enabled` | `false` | start the data-migration engine
+| `data.poll-interval` | `5s` | engine poll cadence
+| `data.batch-size` / `data.sequential-batch-size` | `200` / `25` | ids per batch
+| `data.claim-expiry` | `10m` | abandoned-claim recovery
+
+3+| *nightjar.coordination*
+| `scheduler.enabled` | `false` | start the simple scheduler
+| `scheduler.poll-interval` / `retry-delay` | `60s` / `5m` | fire cadence / failed-job retry
+| `scheduler.fire-lock-ttl` | `10m` | lease on the global fire lock
+| `worker.enabled` | `false` | expose the `WorkerPool` bean
+| `worker.permit-ttl` / `cleanup-interval` | `10m` / `10s` | crash self-healing
+| `worker.default-concurrency` | `1` | unconfigured worker types
+|===
+
+== Taking over
+
+Every bean above is `@ConditionalOnMissingBean` — define your own to replace
+it. Typical cases:
+
+[source,kotlin]
+----
+@Bean
+fun eventSerializer(mapper: ObjectMapper): EventSerializer =       // custom types / eventType overrides
+    JacksonEventSerializer(mapper, listOf(OrderShipped::class.java, InvoiceSent::class.java))
+
+@Bean
+fun eventTransport(): EventTransport = MyKafkaTransport(...)       // different broker
+----
+
+Setting `nightjar.domain-event.enabled=false` removes the event stack
+entirely while keeping the rest.
+
+== Cluster-wide stop
+
+With `nightjar.coordination.worker.enabled=true`, suspending the event worker
+type pauses delivery and processing on **every** instance — `concurrency = 0`,
+made broker-agnostic:
+
+[source,kotlin]
+----
+workerPool.configure("nightjar-domain-events", 0)   // pause the whole cluster
+workerPool.configure("nightjar-domain-events", 1)   // resume — nothing was lost or suspended
+----
+
+While paused the relay sends nothing and consumers drop messages unclaimed; no
+record changes state, so resuming picks up exactly where it left off. Without
+the worker pool enabled the gate stays open (no stop wired). The worker type is
+`nightjar.domain-event.worker-type`.
+
+== Transactional process lock
+
+The auto-configured `ProcessLock` joins the active transaction: acquiring a
+lock inside `@Transactional` code makes it **part of that transaction** — a
+rollback releases it, a commit holds it. A contended acquire returns `false`
+without poisoning the
+transaction. Outside a transaction it falls back to an autonomous connection
+with the lease TTL as the crash net. (The scheduler's internal fire-lock runs
+on a background thread with no transaction, so it always uses the autonomous
+path.)
+
+== Gotchas
+
+* **Identity propagation isn't automatic.** nightjar carries identity in the
+  event `metadata` map, but nothing populates it unless you define a
+  `MetadataProvider` bean reading your security context. Events flow without
+  it — the attached user/tenant is just silently absent. Read it in listeners
+  via `envelope.getMetadata()`.
+* Kotlin **data-class events** need `jackson-module-kotlin` registered in
+  your `ObjectMapper`
+* Events **overriding `eventType()`** need a custom serializer (the default
+  keys by simple class name)
+* `migrations-liquibase` on the classpath triggers Boot's *own* Liquibase
+  auto-configuration too — `spring.liquibase.enabled=false` unless you use it
+* Publishing before the context finished starting (or after shutdown) throws —
+  publish from request handlers, listeners or lifecycle-started components
+
+Design rationale: link:spring-boot-starter-design.md[spring-boot-starter-design.md].

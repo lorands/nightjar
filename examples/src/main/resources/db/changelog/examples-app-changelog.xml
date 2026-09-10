@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  An APPLICATION using the nightjar migration convention for its own schema:
+  manifest + changelog + pristine SQL. nightjar module schemas (domain-event,
+  data-migration tables) are discovered and applied alongside automatically.
+-->
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="examples-app-1" author="nightjar-examples">
+        <sqlFile path="db/sql/examples-app-schema.sql"/>
+    </changeSet>
+
+</databaseChangeLog>

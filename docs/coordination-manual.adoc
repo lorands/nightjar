@@ -1,0 +1,153 @@
+= nightjar coordination — User Manual
+:toc: left
+:toclevels: 3
+:icons: font
+:source-highlighter: rouge
+:sectnums:
+
+Cluster-coordination primitives for multi-instance JVM applications,
+framework-free: a named mutex, a concurrency throttle and a persistent
+aggregate scheduler — all backed by the database you already have.
+
+== Process lock
+
+A cross-instance named mutex. Non-blocking (acquisition succeeds or fails
+immediately), non-reentrant, explicitly released — with an optional *lease*:
+
+[source,kotlin]
+----
+if (lock.tryAcquire("monthly-invoicing", Duration.ofMinutes(30))) { // <1>
+    try { generateInvoices() } finally { lock.release("monthly-invoicing") }
+}
+// or equivalently:
+lock.withLock("monthly-invoicing", Duration.ofMinutes(30)) { generateInvoices() }
+----
+<1> The TTL is the crash insurance: if the holder dies, the lock is atomically
+    taken over by the next acquirer once the lease elapses. `null` TTL = never
+    expires (legacy semantics — use deliberately).
+
+Pick TTLs comfortably above the longest legitimate hold time. `exists(id)`
+reports only live (non-expired) locks.
+
+`JdbcProcessLock` optionally takes a `TransactionalConnectionSource`. When one
+is supplied and a transaction is active, the lock **joins that transaction** —
+acquired inside it, a rollback releases the lock and a commit holds it (the
+lock row is an `INSERT` in the caller's transaction). A contended acquire still
+returns `false` without
+aborting the transaction (the contended `INSERT` is savepoint-guarded). With no
+active transaction it uses an autonomous connection and relies on the lease TTL.
+The Spring Boot starter wires this automatically.
+
+== Worker pool
+
+A cross-instance concurrency throttle — a *worker* is a claimed execution
+slot of a *worker type*:
+
+[source,kotlin]
+----
+pool.configure("catalog-import", 2)               // cluster-wide cap
+val accepted = pool.execute("catalog-import") {   // claim → run on this thread → release
+    importCatalog()
+}                                                  // false = at capacity: skip, don't queue
+----
+
+* Types default to concurrency **1** until configured
+* `configure(type, 0)` **suspends** the type cluster-wide — the operational
+  pause button; set it back to resume
+* Permits expire (default 10 min) and are swept (every 10 s): crashed holders
+  self-heal
+* Not a thread pool: tasks run on the calling thread; the pool only decides
+  *whether* they run
+
+== Simple scheduler
+
+Persistent one-shot timers for aggregates. `(aggregateId, jobType)` is the
+identity: scheduling again *moves* the timer, `cancel` removes it.
+
+[source,kotlin]
+----
+val scheduler = SimpleScheduler.builder()
+    .store(JdbcSchedulerStore(dataSource, transactions)) // <1>
+    .lock(processLock)                                   // <2>
+    .workerPool(pool)                                    // <3>
+    .transactionalRunner(transactions)                   // <4>
+    .build()
+
+scheduler.register("payment-reminder") { orderId, context ->   // <5>
+    if (remind(orderId, context)) null                          // done
+    else Instant.now().plus(Duration.ofDays(1))                 // fire again tomorrow
+}
+scheduler.start()
+
+// inside business code — atomic with the transaction:
+scheduler.schedule(order.id, Instant.now().plus(Duration.ofDays(3)),
+                   "payment-reminder", """{"channel":"email"}""")
+----
+<1> `schedule()` joins the caller's transaction — no timer for a rolled-back order.
+<2> Fire passes run under this lock (lease default 10 min): one instance polls at a time.
+<3> Optional: wrap firing in a worker type so operations can suspend the
+    scheduler cluster-wide (`configure("simple-scheduler", 0)`).
+<4> Each job runs in its own transaction.
+<5> Context is an opaque `String` — serialize however you like; nightjar
+    bundles no JSON library.
+
+=== Semantics
+
+* *Single-fire*: due entries are deleted **before** execution — never fired
+  twice, even when an instance crashes mid-pass
+* *At-least-once overall*: a failed job (exception) is rescheduled after the
+  retry delay (default 5 min); jobs must be idempotent
+* *Unregistered types are never lost*: rescheduled with a warning until a job
+  is registered (deploy-order tolerance)
+* Entries fire oldest-first within a pass; `fire()` can be called manually
+
+=== Configuration reference
+
+[cols="1,1,2"]
+|===
+| Option | Default | Meaning
+
+| `store` / `lock` | _required_ | persistence + single-fire mutex
+| `transactionalRunner` | none | wraps each job invocation
+| `workerPool` (+ type) | none | makes fire passes suspendable
+| `pollInterval` | 60 s | fire-pass cadence
+| `retryDelay` | 5 min | failed / unregistered job reschedule delay
+| `batchSize` | 100 | max due entries per pass
+| `fireLockTtl` | 10 min | lease on the global fire lock
+| `clock` | system UTC | injectable for tests
+|===
+
+== JDBC backing
+
+Module `coordination-jdbc` (zero external dependencies). Schema ships through
+the link:migrations-manual.adoc[migrations convention] — tables
+`process_lock`, `worker`, `worker_config`, `simple_scheduler`. In-memory
+implementations of all three primitives live in the core module for tests and
+single-instance applications.
+
+Operational queries:
+
+[source,sql]
+----
+SELECT * FROM process_lock;                                   -- who holds what since when
+SELECT type, COUNT(*) FROM worker GROUP BY type;              -- live permits per type
+SELECT * FROM worker_config WHERE concurrency = 0;            -- suspended types
+SELECT * FROM simple_scheduler ORDER BY fire_after LIMIT 20;  -- upcoming timers
+----
+
+== Wiring
+
+* *Spring Boot*:
+  link:../examples/src/main/java/dev/nightjar/examples/spring/CoordinationConfiguration.java[examples/spring/CoordinationConfiguration.java]
+* *Quarkus (CDI + JTA)*:
+  link:../examples/src/main/kotlin/dev/nightjar/examples/quarkus/CoordinationProducers.kt[examples/quarkus/CoordinationProducers.kt]
+* Composition with domain-event: an `OutboxStore`'s `withSequenceLock` can
+  delegate to `ProcessLock` when one shared lock namespace is needed
+
+== GraalVM native image
+
+All three primitives are native-image-friendly (no reflection, runtime-created
+threads) and exercised by the link:../native-smoke/[native-smoke] harness.
+
+Design rationale and the alternatives rejected:
+link:coordination-design.md[coordination-design.md].

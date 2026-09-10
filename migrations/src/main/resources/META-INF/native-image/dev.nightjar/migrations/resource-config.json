@@ -1,0 +1,9 @@
+{
+  "resources": {
+    "includes": [
+      {
+        "pattern": "\\QMETA-INF/nightjar/migrations.properties\\E"
+      }
+    ]
+  }
+}

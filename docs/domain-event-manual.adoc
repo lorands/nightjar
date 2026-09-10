@@ -1,0 +1,385 @@
+= nightjar domain-event — User Manual
+:toc: left
+:toclevels: 3
+:icons: font
+:source-highlighter: rouge
+:sectnums:
+
+Framework-free domain events for DDD applications on the JVM (Java 17+),
+built around a transactional outbox.
+
+== Introduction
+
+`domain-event` lets aggregates and application services publish domain events
+that are delivered reliably to listeners — in the same process or across
+service instances — without coupling your domain to any framework or broker.
+
+Core promises:
+
+* *Atomicity* — an event published inside a transaction commits or rolls back
+  with the business data (transactional outbox pattern). No ghost events.
+* *At-least-once delivery* — failed processing is retried on a time window and
+  eventually suspended for manual intervention; listeners must be idempotent.
+* *Zero dependencies* — the core module needs `kotlin-stdlib` only. Database,
+  broker, JSON library and transaction manager plug in through small SPIs.
+
+== Concepts
+
+[cols="1,3"]
+|===
+| Type | Role
+
+| `DomainEvent`
+| Marker interface for your immutable event classes. Optional overrides:
+  `eventType()` (stable wire name, default = simple class name) and
+  `sequenceKey()` (events with the same non-null key are processed
+  sequentially, cluster-wide).
+
+| `EventEnvelope<E>`
+| Immutable wrapper added at publish time: `id` (UUIDv7, time-sortable),
+  `type`, `occurredAt`, `metadata` map, and the event itself. Infrastructure
+  identity lives here — events are never mutated.
+
+| `DomainEventBus`
+| The engine. Builder-configured; publishes, relays the outbox, dispatches to
+  listeners, retries.
+
+| `SyncDomainEventListener<E>`
+| Runs *inline* during `publish`, on the publisher's thread, inside the
+  caller's transaction. Exceptions propagate and roll the transaction back.
+
+| `DomainEventListener<E>`
+| Runs *asynchronously* after the publishing transaction, each invocation
+  wrapped in the configured `TransactionalRunner`. Must be idempotent: a
+  failing listener causes *all* listeners of that event to re-run on retry.
+|===
+
+== Quickstart
+
+=== Kotlin
+
+[source,kotlin]
+----
+class OrderPlaced(val orderId: String, val amountCents: Long) : DomainEvent
+
+val bus = DomainEventBus.builder()
+    .serializer(MySerializer)              // <1>
+    .store(InMemoryOutboxStore())          // <2>
+    .transport(InProcessEventTransport())  // <3>
+    .build()
+
+bus.subscribeSync(OrderPlaced::class.java) { env -> /* in the publishing TX */ }
+bus.subscribe(OrderPlaced::class.java) { env -> /* async, idempotent */ }
+
+bus.start()
+bus.publish(OrderPlaced("order-1", 4_999))
+----
+<1> Your `EventSerializer` — adapt Jackson or kotlinx.serialization (<<serializer>>).
+<2> Swap for `JdbcOutboxStore` in production (<<jdbc>>).
+<3> Swap for `RabbitMqEventTransport` in production (<<rabbitmq>>).
+
+=== Java
+
+[source,java]
+----
+public record OrderShipped(String orderId, String trackingCode) implements DomainEvent {
+    @Override public String sequenceKey() { return orderId(); }
+}
+
+DomainEventBus bus = DomainEventBus.builder()
+        .serializer(SERIALIZER)
+        .store(new InMemoryOutboxStore())
+        .transport(new InProcessEventTransport())
+        .build();
+
+bus.subscribe(OrderShipped.class, env -> handle(env.getEvent()));
+bus.start();
+bus.publish(new OrderShipped("order-7", "TRACK-123"));
+----
+
+Runnable versions of both (plus everything below) live in the
+link:../examples/[examples module] and are executed on every build.
+
+== The event lifecycle
+
+[source]
+----
+publish(event)  [caller's transaction]
+  ├── sync listeners run inline       — exception ⇒ whole TX rolls back
+  └── outbox append: status CREATED   — commits with the business data
+
+OutboxRelay     [background thread, pollInterval]
+  └── CREATED / retry-due ERROR / stale SENT ──> transport.send() ──> SENT
+
+Consumer        [transport push]
+  ├── atomic claim: SENT ⇒ PROCESSING  (losers drop the message)
+  ├── sequenceKey? take cluster-wide lock
+  ├── ONE transaction: async listeners in order + row delete
+  │     — a failing listener rolls the whole set back; nothing half-committed
+  ├── success ⇒ row deleted with the listeners' work (outbox is transient)
+  └── failure ⇒ ERROR, attempts++, lastError recorded   [own transaction]
+        └── retry re-runs ALL listeners per RetryPolicy; exhausted ⇒ suspended = true
+----
+
+Suspended events stay in the table for inspection; `OutboxStore.resume(id)`
+puts one back in flight (one redelivery; it re-suspends if it fails again
+beyond the window).
+
+== Configuration reference
+
+All configuration happens on `DomainEventBus.builder()`:
+
+[cols="1,1,2"]
+|===
+| Option | Default | Meaning
+
+| `serializer` | _required_ | `EventSerializer` for payloads
+| `store` | _required_ | `OutboxStore` (JDBC, in-memory, custom)
+| `transport` | _required_ | `EventTransport` (RabbitMQ, in-process, custom)
+| `transactionalRunner` | `DIRECT` (none) | One transaction around all async listeners of an event + the outbox delete
+| `idGenerator` | UUIDv7 | Event id generation
+| `metadataProvider` | empty | Per-publish metadata (user, tenant, trace id…)
+| `observer` | no-op | `EventObserver` hooks: published / processed / failed / suspended
+| `processingGate` | always open | `ProcessingGate` cluster-wide stop: while closed the relay sends nothing and consumers drop messages unclaimed (no record changes state). Back it with the worker pool's `isSuspended(type)`, a feature flag, etc.
+| `retryPolicy` | 20&#8201;s → 5&#8201;min → 1&#8201;h | See <<retry>>
+| `clock` | system UTC | Injectable for tests
+| `pollInterval` | 500&#8201;ms | Outbox relay poll cadence
+| `batchSize` | 200 | Max records per relay poll
+| `redeliverAfter` | 1&#8201;h | Resend `SENT` records never claimed (lost messages)
+|===
+
+[#retry]
+=== Retry and suspension
+
+The default `TimeWindowRetryPolicy` replicates battle-tested behavior: a
+failed event younger than 5 minutes retries every 20 seconds; older ones every
+5 minutes; after 1 hour of failures it is *suspended* and waits for an
+operator (fix the bug, then `store.resume(id)`).
+
+[source,kotlin]
+----
+.retryPolicy(TimeWindowRetryPolicy(
+    /* youngInterval  */ Duration.ofSeconds(20),
+    /* youngWindow    */ Duration.ofMinutes(5),
+    /* matureInterval */ Duration.ofMinutes(5),
+    /* maxAge         */ Duration.ofHours(1)))
+----
+
+Implement `RetryPolicy` for anything fancier (exponential backoff, per-type
+windows).
+
+[#serializer]
+=== Serialization
+
+nightjar bundles no JSON library. A Jackson adapter is ~15 lines:
+
+[source,kotlin]
+----
+class JacksonEventSerializer(
+    private val mapper: ObjectMapper,
+    types: List<Class<out DomainEvent>>,
+) : EventSerializer {
+    private val byName = types.associateBy { it.simpleName }   // <1>
+
+    override fun serialize(event: DomainEvent): ByteArray = mapper.writeValueAsBytes(event)
+
+    override fun deserialize(type: String, payload: ByteArray): DomainEvent {
+        val eventClass = byName[type] ?: throw IllegalArgumentException("Unknown event type: $type")
+        return mapper.readValue(payload, eventClass)
+    }
+}
+----
+<1> Explicit registration — never deserialize arbitrary class names from the wire.
+
+[#jdbc]
+== Persistence: the JDBC outbox store
+
+Module `domain-event-jdbc` (zero external dependencies — bring your driver).
+
+. Apply the schema. The module contributes it through the
+  link:migrations-manual.adoc[nightjar migrations convention] (manifest +
+  changelog + pristine SQL at
+  `dev/nightjar/domainevent/jdbc/domain-event-postgresql.sql`) — running
+  `migrations-liquibase` at deploy time picks it up automatically, or include
+  `db/changelog/domain-event-jdbc-changelog.xml` in your own Liquibase setup.
+. Wire the store:
+
+[source,kotlin]
+----
+val transactions = JdbcTransactions(dataSource)         // framework-free TX management
+val store = JdbcOutboxStore(dataSource, transactions)   // appends join the active TX
+
+val bus = DomainEventBus.builder()
+    .serializer(serializer)
+    .store(store)
+    .transport(transport)
+    .transactionalRunner(transactions)
+    .build()
+
+transactions.run {
+    orderRepository.save(order)          // via transactions.current()
+    bus.publish(OrderPlaced(order.id))   // same transaction — atomic
+}
+----
+
+`JdbcTransactions` suits applications without a framework. With Spring or
+Quarkus, adapt *their* transaction management instead — see <<spring>> and
+<<quarkus>>.
+
+Operational queries you may want in dashboards:
+
+[source,sql]
+----
+SELECT count(*) FROM domain_event WHERE status = 'ERROR' AND NOT suspended; -- retrying
+SELECT id, event_type, attempts, last_error
+  FROM domain_event WHERE suspended;                                        -- needs attention
+UPDATE domain_event SET status = 'CREATED', suspended = FALSE
+  WHERE id = :id;                                                           -- manual resume (or store.resume)
+----
+
+[#rabbitmq]
+== Transport: RabbitMQ
+
+Module `domain-event-rabbitmq` (single dependency: `com.rabbitmq:amqp-client`).
+
+[source,kotlin]
+----
+val factory = ConnectionFactory().apply { host = "rabbitmq" }
+val transport = RabbitMqEventTransport(factory, "myapp.domain.events")
+----
+
+Declares a durable queue (persistent messages, manual ack) and a
+`<queue>.poison` dead-letter queue. Reliability does *not* depend on the
+broker: the outbox store is the source of truth, lost messages are re-sent by
+the relay (`redeliverAfter`), and processing retries are store-driven — which
+is what keeps the transport SPI broker-agnostic (NATS, Kafka, … can implement
+the same three methods).
+
+[#spring]
+== Wiring: Spring Boot
+
+The libraries have no Spring dependency; integration is one `@Configuration`
+(complete compile-checked version:
+link:../examples/src/main/java/dev/nightjar/examples/spring/DomainEventConfiguration.java[examples/spring/DomainEventConfiguration.java]):
+
+[source,java]
+----
+@Bean
+TransactionalConnectionSource txConnectionSource(DataSource ds) {        // <1>
+    return () -> TransactionSynchronizationManager.isActualTransactionActive()
+            ? DataSourceUtils.getConnection(ds) : null;
+}
+
+@Bean
+TransactionalRunner transactionalRunner(PlatformTransactionManager tm) { // <2>
+    TransactionTemplate tpl = new TransactionTemplate(tm);
+    tpl.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    return action -> tpl.executeWithoutResult(status -> action.run());
+}
+
+@Bean
+SmartInitializingSingleton busStarter(DomainEventBus bus) {              // <3>
+    return () -> { /* bus.subscribe(...) */ bus.start(); };
+}
+----
+<1> Publishing inside `@Transactional` code joins that transaction.
+<2> Each async listener runs in its own Spring transaction.
+<3> Subscribe before `start()` so no message arrives unhandled.
+
+[#quarkus]
+== Wiring: Quarkus
+
+Pure CDI + JTA — no Quarkus-specific APIs (complete version:
+link:../examples/src/main/kotlin/dev/nightjar/examples/quarkus/DomainEventProducers.kt[examples/quarkus/DomainEventProducers.kt]):
+
+[source,kotlin]
+----
+@Produces @ApplicationScoped
+fun domainEventBus(dataSource: DataSource, utx: UserTransaction): DomainEventBus {
+    val connectionSource = TransactionalConnectionSource {
+        if (utx.status == Status.STATUS_ACTIVE) dataSource.connection else null  // <1>
+    }
+    val runner = TransactionalRunner { action ->
+        utx.begin()
+        try { action.run(); utx.commit() } catch (e: Exception) { utx.rollback(); throw e }
+    }
+    return DomainEventBus.builder() /* ... */ .build()
+}
+
+fun onStart(@Observes @Initialized(ApplicationScoped::class) ev: Any, bus: DomainEventBus) {
+    // bus.subscribe(...)
+    bus.start()
+}
+----
+<1> Agroal enlists connections in the active JTA transaction and reclaims them
+    at completion.
+
+== Operations and Cloud-Native behavior
+
+* *Multi-instance safe* — claiming is an atomic store operation; `sequenceKey`
+  locks are database-level. Run as many replicas as you like.
+* *Graceful shutdown* — `bus.close()` stops the relay and transport;
+  in-flight work is recovered by other instances (or the next start) through
+  `redeliverAfter`.
+* *Observability* — implement `EventObserver` to bridge to Micrometer /
+  OpenTelemetry: counters from `published`/`processed`/`failed`, alerts on
+  `suspended`.
+* *Configuration* — everything is constructor/builder injected; bind it from
+  env vars, ConfigMaps, or your framework's config mechanism.
+
+== GraalVM native image
+
+The libraries are native-image-friendly by design — no reflection, no
+classpath scanning, no dynamic proxies, no `Class.forName`:
+
+* Listener registration uses explicit `Class` tokens; event types travel as
+  explicit `eventType` strings, never as class names
+* Executors, locks and `SecureRandom` are created at runtime (no
+  build-time-initialization traps)
+* `domain-event-jdbc` and `migrations` ship native-image *resource metadata*
+  (`META-INF/native-image/dev.nightjar/...`) so classpath resources (migration
+  manifests, changelogs, DDL) are embedded automatically
+
+What the *host application* still owns: reachability metadata for its own
+`EventSerializer` implementation — e.g. Jackson needs your event classes
+registered, which Quarkus and Spring Boot AOT generate for you.
+
+Verified continuously by the link:../native-smoke/[native-smoke module]:
+`./gradlew :native-smoke:nativeRun` AOT-compiles a harness covering dispatch,
+retries, data migrations and manifest discovery, and fails the run on any
+regression. GraalVM is provisioned automatically via Gradle toolchains.
+
+`migrations-liquibase` is deliberately out of native scope: it is a
+deploy-time JVM tool (init container/CLI); applications going native never
+carry it.
+
+== Extending
+
+Implement one interface per integration:
+
+[cols="1,2"]
+|===
+| SPI | Implement when you need
+
+| `EventTransport` | another broker (NATS, Kafka, SQS, …) — 3 methods
+| `OutboxStore` | another database or storage model
+| `EventSerializer` | your serialization format/library
+| `TransactionalRunner` + `TransactionalConnectionSource` | your transaction manager
+| `RetryPolicy` | custom backoff strategies
+| `EventObserver` | metrics/tracing bridges
+| `IdGenerator`, `MetadataProvider` | custom ids, ambient context
+| `ProcessingGate` | a cluster-wide stop switch (worker-pool suspension, feature flag, …)
+|===
+
+[NOTE]
+.Identity propagation is not automatic
+====
+nightjar carries the acting user, tenant or trace on the envelope's `metadata`
+map — but **nothing populates it by default**. Wire a `MetadataProvider` that
+reads your security context at publish time, and read
+`envelope.getMetadata().get("userId")` in listeners. Events flow correctly
+without it; only the attached identity is missing, silently.
+====
+
+Design rationale and the alternatives rejected are documented in
+link:domain-event-design.md[domain-event-design.md].

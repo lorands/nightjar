@@ -1,0 +1,12 @@
+{
+  "resources": {
+    "includes": [
+      {
+        "pattern": "\\Qdb/changelog/coordination-jdbc-changelog.xml\\E"
+      },
+      {
+        "pattern": "\\Qdev/nightjar/coordination/jdbc/coordination-postgresql.sql\\E"
+      }
+    ]
+  }
+}
