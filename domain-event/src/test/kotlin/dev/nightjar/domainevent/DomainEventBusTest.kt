@@ -298,6 +298,45 @@ class DomainEventBusTest {
         awaitUntil("unhandled event cleaned up") { store.size() == 0 }
     }
 
+    /**
+     * A consumer can finish before the transport's `send` returns — always with
+     * an in-process transport that dispatches inline, and whenever another
+     * instance is quicker with a real broker. The relay must not overwrite that
+     * outcome: a record reset from ERROR to SENT is not retried on the policy's
+     * schedule, it waits for `redeliverAfter` — an hour by default.
+     */
+    @Test
+    fun `a failure landing before send returns still retries on schedule`() {
+        val attempts = AtomicInteger()
+        val b = bus { transport(InlineEventTransport()) }
+        b.subscribe(TestEvent::class.java) {
+            attempts.incrementAndGet()
+            throw IllegalStateException("always fails")
+        }
+
+        b.start()
+        b.publish(TestEvent("inline"))
+
+        // Retry interval is 50 ms here, so a healthy relay gets well past three
+        // attempts; a clobbered record would stop at one.
+        awaitUntil("event retried repeatedly") { attempts.get() >= 3 }
+    }
+
+    /** Delivers on the caller's thread, so the consumer always wins the race with the relay. */
+    private class InlineEventTransport : EventTransport {
+        private val handler = AtomicReference<TransportMessageHandler?>()
+
+        override fun send(message: TransportMessage) {
+            handler.get()?.onMessage(message)
+        }
+
+        override fun startConsuming(handler: TransportMessageHandler) {
+            this.handler.set(handler)
+        }
+
+        override fun close() {}
+    }
+
     private fun awaitUntil(what: String, timeoutMs: Long = 5_000, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {

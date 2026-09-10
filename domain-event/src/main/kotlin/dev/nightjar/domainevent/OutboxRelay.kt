@@ -90,8 +90,22 @@ internal class OutboxRelay(
     }
 
     private fun send(record: OutboxRecord) {
-        transport.send(TransportMessage(record.id, record.eventType, record.payload, record.metadata))
+        // Mark SENT *before* the handoff. The moment the transport accepts a
+        // message a consumer may claim, process and either delete the record or
+        // mark it ERROR — on the transport's own thread here, on another instance
+        // with a real broker. Marking afterwards races that and overwrites the
+        // outcome back to SENT, and the relay then leaves a SENT record alone
+        // until `redeliverAfter` (an hour by default) instead of retrying it on
+        // the retry policy's schedule.
         store.markSent(record.id)
+        try {
+            transport.send(TransportMessage(record.id, record.eventType, record.payload, record.metadata))
+        } catch (e: Exception) {
+            // Nothing was handed over, so no consumer will move the record off
+            // SENT — record the failure to put it back on the retry schedule.
+            store.markError(record.id, e.stackTraceToString())
+            throw e
+        }
     }
 
     override fun close() {
