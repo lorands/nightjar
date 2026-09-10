@@ -101,11 +101,19 @@ repository at `build/staging-repo`. `examples`, `native-smoke` and
 
 Releases are driven entirely by git tags via `.github/workflows/release.yml`
 (`v1.2.3`, or `v1.2.3-rc.1` for a pre-release). The workflow builds, runs the
-hermetic suite, stages the artifacts and creates the GitHub release with the
-jars attached. Its *Run workflow* button is a dry run. Local equivalent:
+hermetic suite, stages the artifacts, publishes them to GitHub Packages and
+creates the GitHub release with the jars attached. Its *Run workflow* button is
+a dry run — it skips both the registry publish and the release, since GitHub
+Packages will not overwrite a version once published. Local equivalent:
 
 ```bash
 ./gradlew build publishAllPublicationsToStagingRepository -Pversion=1.2.3
 ```
+
+Publishing to GitHub Packages needs `githubPackagesUsername`/`githubPackagesPassword`
+Gradle properties (the workflow passes them as `ORG_GRADLE_PROJECT_*` from
+`github.actor` and the job's `GITHUB_TOKEN`, with `packages: write`). Gradle
+only requires them when a task publishing there is in the graph, so ordinary
+builds and the staging publish need no credentials.
 
 GitHub Action versions are pinned to major tags and should be kept current.

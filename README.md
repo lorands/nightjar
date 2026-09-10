@@ -50,15 +50,20 @@ Java looks just like you'd hope — see [examples](examples/).
 
 ## Installation
 
-Not on Maven Central yet. Every tagged release publishes jars (plus sources
-jars, POMs and checksums) to
-[GitHub Releases](https://github.com/lorands/nightjar/releases) — including
-`nightjar-<version>-maven-repo.zip`, a ready-made Maven repository. Unpack it
-and point a repository at it:
+Not on Maven Central yet. Every tagged release goes to **GitHub Packages** and
+to [GitHub Releases](https://github.com/lorands/nightjar/releases).
+
+### GitHub Packages
 
 ```kotlin
 repositories {
-    maven { url = uri("file:///path/to/unpacked-maven-repo") }
+    maven {
+        url = uri("https://maven.pkg.github.com/lorands/nightjar")
+        credentials {
+            username = providers.gradleProperty("gpr.user").get()
+            password = providers.gradleProperty("gpr.token").get()
+        }
+    }
 }
 
 dependencies {
@@ -69,7 +74,27 @@ dependencies {
 }
 ```
 
-Or build from source and install into your local Maven repository:
+> **GitHub Packages requires authentication even to read**, including for
+> public repositories. Consumers need a GitHub personal access token with the
+> `read:packages` scope — put `gpr.user` and `gpr.token` in
+> `~/.gradle/gradle.properties`. This is a GitHub limitation, not a nightjar
+> one; once nightjar is on Maven Central no credentials will be needed.
+
+### Release assets (no account required)
+
+Each release attaches every module's jar and sources jar, plus
+`nightjar-<version>-maven-repo.zip` — a ready-made Maven repository with POMs
+and checksums. Unpack it and point a repository at it:
+
+```kotlin
+repositories {
+    maven { url = uri("file:///path/to/unpacked-maven-repo") }
+}
+```
+
+### From source
+
+Build and install into your local Maven repository:
 
 ```bash
 git clone https://github.com/lorands/nightjar.git && cd nightjar
@@ -105,8 +130,8 @@ devbox services up          # PostgreSQL on :6543, RabbitMQ on :5672
 
 Releases are tag-driven. Pushing a semver tag runs
 [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds,
-runs the hermetic test suite, and publishes a GitHub release with every
-published module's jar and sources jar attached:
+runs the hermetic test suite, publishes every shipping module to GitHub
+Packages, and creates a GitHub release with the jars and sources jars attached:
 
 ```bash
 git tag v1.2.3 && git push origin v1.2.3
@@ -116,7 +141,8 @@ The version comes from the tag — nothing in the repository records it, and
 ordinary builds stay on `0.1.0-SNAPSHOT`. Tags with a pre-release identifier
 (`v1.2.3-rc.1`) are marked as pre-releases. The workflow's *Run workflow*
 button does a dry run: it builds and uploads the artifacts without creating a
-release.
+release or publishing to GitHub Packages — which matters, because a version
+already in the registry cannot be overwritten.
 
 Modules applying the `nightjar.published` convention plugin are the ones that
 ship; `examples`, `native-smoke` and `spring-boot-compat-check` deliberately

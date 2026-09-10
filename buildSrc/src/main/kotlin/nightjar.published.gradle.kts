@@ -7,10 +7,11 @@
  * `spring-boot-compat-check` — deliberately do not apply this, so they never
  * reach a release.
  *
- * Two repositories are wired:
+ * Three repositories are wired:
  * - `mavenLocal` via the standard `publishToMavenLocal` task
  * - `staging`, a plain directory (`<root>/build/staging-repo`) that the release
  *   workflow packages into the GitHub release
+ * - `githubPackages`, the GitHub Maven registry
  */
 
 plugins {
@@ -59,6 +60,20 @@ publishing {
         maven {
             name = "staging"
             url = uri(rootProject.layout.buildDirectory.dir("staging-repo"))
+        }
+
+        // GitHub's Maven registry. Credentials come from the `githubPackages`
+        // Gradle properties, which the release workflow supplies as
+        // ORG_GRADLE_PROJECT_githubPackagesUsername / ...Password. Gradle only
+        // demands them when a task publishing here is actually in the graph, so
+        // every other build is unaffected.
+        maven {
+            name = "githubPackages"
+            // Env var so a fork publishes to its own registry; the value is
+            // owner/repo, e.g. lorands/nightjar.
+            val slug = providers.environmentVariable("GITHUB_REPOSITORY").getOrElse("lorands/nightjar")
+            url = uri("https://maven.pkg.github.com/$slug")
+            credentials(PasswordCredentials::class)
         }
     }
 }

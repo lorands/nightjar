@@ -7,7 +7,7 @@ name: Release
 #
 # Pre-release tags (v1.2.3-rc.1) are marked as pre-releases automatically.
 # Use "Run workflow" for a dry run: it builds and uploads the artifacts for
-# inspection without creating a release.
+# inspection without creating a release or publishing to GitHub Packages.
 
 on:
   push:
@@ -34,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # creating the release and uploading its assets
+      packages: write # publishing to the GitHub Maven registry
 
     steps:
       - name: Check out
@@ -107,6 +108,15 @@ jobs:
           name: nightjar-${{ steps.version.outputs.version }}
           path: release-assets/
           if-no-files-found: error
+
+      # Tag builds only: a dry run must never put its version into the registry,
+      # and GitHub Packages refuses to overwrite a version once published.
+      - name: Publish to GitHub Packages
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          ORG_GRADLE_PROJECT_githubPackagesUsername: ${{ github.actor }}
+          ORG_GRADLE_PROJECT_githubPackagesPassword: ${{ secrets.GITHUB_TOKEN }}
+        run: ./gradlew publishAllPublicationsToGithubPackagesRepository -Pversion="${{ steps.version.outputs.version }}"
 
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
