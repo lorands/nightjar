@@ -122,6 +122,31 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Say plainly what this run did and did not do. A build-only dry run looks
+      # identical to a rehearsal from the outside — both are green — and the
+      # difference is whether the credentials were exercised at all.
+      - name: Report what this run verified
+        env:
+          RELEASING: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          REHEARSING: ${{ inputs.rehearse }}
+        run: |
+          {
+            if [ "$RELEASING" = "true" ]; then
+              echo '### Release run — publishing for real'
+            elif [ "$REHEARSING" = "true" ]; then
+              echo '### Rehearsal — signed, validated against Central, publishing nothing'
+            else
+              echo '### Build-only dry run'
+              echo
+              echo 'Artifacts were **not signed** and **no credentials were used**:'
+              echo 'this run says nothing about whether `SIGNING_KEY`,'
+              echo '`CENTRAL_USERNAME` or `CENTRAL_PASSWORD` are correct.'
+              echo
+              echo 'Re-run with **rehearse** ticked to validate them against'
+              echo 'Maven Central without publishing.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload artifacts to the workflow run
         uses: actions/upload-artifact@v7
         with:
