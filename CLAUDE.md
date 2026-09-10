@@ -181,4 +181,10 @@ fails validation intermittently.
 removed, and AUTOMATIC means no human gate. The hermetic build is the only
 thing between a tag and a permanent artifact.
 
+Because of that, `workflow_dispatch` carries a `rehearse` flag: it signs and
+uploads to Central as `USER_MANAGED`, which validates the bundle and parks it
+instead of releasing. Same code path, same credentials, same signatures — the
+way to prove a secret or key change works without spending a version. Use it
+after rotating the signing key or the portal token.
+
 GitHub Action versions are pinned to major tags and should be kept current.

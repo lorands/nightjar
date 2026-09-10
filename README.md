@@ -131,10 +131,13 @@ git tag v1.2.3 && git push origin v1.2.3
 
 The version comes from the tag — nothing in the repository records it, and
 ordinary builds stay on `0.1.0-SNAPSHOT`. Tags with a pre-release identifier
-(`v1.2.3-rc.1`) are marked as pre-releases. The workflow's *Run workflow*
-button does a dry run: it builds and uploads the artifacts without creating a
-release or publishing to GitHub Packages — which matters, because a version
-already in the registry cannot be overwritten.
+(`v1.2.3-rc.1`) are marked as pre-releases.
+
+The workflow's *Run workflow* button never publishes. Left alone it just builds
+and uploads the artifacts for inspection; tick **rehearse** and it signs them
+and uploads to Maven Central for validation only, which proves the signing key,
+portal token and keyserver all work before a tag makes anything permanent — then
+you drop the deployment in the portal.
 
 Modules applying the `nightjar.published` convention plugin are the ones that
 ship; `examples`, `native-smoke` and `spring-boot-compat-check` deliberately

@@ -6,8 +6,11 @@ name: Release
 #   git tag v1.2.3 && git push origin v1.2.3
 #
 # Pre-release tags (v1.2.3-rc.1) are marked as pre-releases automatically.
-# Use "Run workflow" for a dry run: it builds and uploads the artifacts for
-# inspection without publishing anywhere or creating a release.
+# "Run workflow" has two modes, neither of which publishes anything:
+#   rehearse = false  build only, unsigned, artifacts uploaded for inspection
+#   rehearse = true   sign and upload to Central for validation, then stop —
+#                     proves the key, token and keyserver work before a tag
+#                     makes anything permanent. Drop the deployment afterwards.
 #
 # Required secrets for a tag release:
 #   SIGNING_KEY       ASCII-armored PGP private key (gpg --armor --export-secret-keys)
@@ -23,9 +26,13 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to build, no leading v (e.g. 1.2.3). Dry run — uploads artifacts, creates no release.'
+        description: 'Version to build, no leading v (e.g. 1.2.3).'
         required: true
         default: '0.0.0-dryrun'
+      rehearse:
+        description: 'Sign and upload to Maven Central for VALIDATION ONLY, then stop. Proves the signing key, token and keyserver all work without publishing anything. Drop the deployment in the portal afterwards.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -89,8 +96,8 @@ jobs:
           # produces unsigned artifacts, which is what it is for — the signing
           # config treats a blank key as no key. This keeps the private key out
           # of every run that has no business signing anything.
-          ORG_GRADLE_PROJECT_signingKey: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.SIGNING_KEY || '' }}
-          ORG_GRADLE_PROJECT_signingPassword: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.SIGNING_PASSWORD || '' }}
+          ORG_GRADLE_PROJECT_signingKey: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.rehearse) && secrets.SIGNING_KEY || '' }}
+          ORG_GRADLE_PROJECT_signingPassword: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.rehearse) && secrets.SIGNING_PASSWORD || '' }}
         run: ./gradlew build publishAllPublicationsToStagingRepository -Pversion="${{ steps.version.outputs.version }}"
 
       - name: Collect release assets
@@ -133,11 +140,15 @@ jobs:
       # human gate — the build above is the only thing between a tag and a
       # permanent artifact.
       - name: Publish to Maven Central
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.rehearse
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           VERSION: ${{ steps.version.outputs.version }}
+          # A tag publishes for real. A rehearsal uploads and validates, then
+          # parks the deployment for you to inspect and drop — same code path,
+          # same signatures, same credentials, nothing permanent.
+          RELEASING: ${{ startsWith(github.ref, 'refs/tags/v') }}
         run: |
           set -euo pipefail
 
@@ -147,10 +158,13 @@ jobs:
 
           AUTH=$(printf '%s:%s' "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 -w0)
 
+          if [ "$RELEASING" = "true" ]; then TYPE=AUTOMATIC; else TYPE=USER_MANAGED; fi
+          echo "publishing type: $TYPE"
+
           DEPLOYMENT=$(curl -sS --fail-with-body \
             -H "Authorization: Bearer $AUTH" \
             -F "bundle=@central-bundle.zip" \
-            "https://central.sonatype.com/api/v1/publisher/upload?name=nightjar-$VERSION&publishingType=AUTOMATIC")
+            "https://central.sonatype.com/api/v1/publisher/upload?name=nightjar-$VERSION&publishingType=$TYPE")
           echo "deployment id: $DEPLOYMENT"
 
           for _ in $(seq 1 60); do
@@ -162,6 +176,14 @@ jobs:
               PUBLISHED)
                 echo "Published to Maven Central as $VERSION" >> "$GITHUB_STEP_SUMMARY"
                 exit 0 ;;
+              VALIDATED)
+                # In AUTOMATIC this is a waypoint on the way to PUBLISHED; in a
+                # rehearsal it is the finish line.
+                if [ "$RELEASING" != "true" ]; then
+                  echo "Rehearsal passed validation — signing key, token and keyserver all work." >> "$GITHUB_STEP_SUMMARY"
+                  echo "Nothing was published. Drop deployment $DEPLOYMENT at https://central.sonatype.com/publishing/deployments" >> "$GITHUB_STEP_SUMMARY"
+                  exit 0
+                fi ;;
               FAILED)
                 echo "::error::Maven Central rejected deployment $DEPLOYMENT"
                 exit 1 ;;
