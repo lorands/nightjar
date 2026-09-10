@@ -53,10 +53,23 @@ Java looks just like you'd hope — see [examples](examples/).
 Not on Maven Central yet. Every tagged release goes to **GitHub Packages** and
 to [GitHub Releases](https://github.com/lorands/nightjar/releases).
 
-### GitHub Packages
+> **GitHub Packages requires a token even to read**, and this repository being
+> public does not change that: the Maven registry authenticates every request,
+> and the publisher cannot enable anonymous access. (GitHub's *container*
+> registry does allow anonymous pulls — the Maven one does not.) Consumers need
+> a personal access token with the `read:packages` scope. If that is not
+> acceptable, the [release asset](#release-assets--no-token-required) below
+> needs no account at all.
+
+Full details — module coordinates, Groovy DSL, version catalogs, CI recipes and
+troubleshooting — are in the
+**[installation manual](docs/installation-manual.adoc)**.
+
+### Gradle
 
 ```kotlin
 repositories {
+    mavenCentral()
     maven {
         url = uri("https://maven.pkg.github.com/lorands/nightjar")
         credentials {
@@ -67,38 +80,61 @@ repositories {
 }
 
 dependencies {
-    implementation("dev.nightjar:domain-event:<version>")
-    implementation("dev.nightjar:domain-event-jdbc:<version>")
+    implementation("dev.nightjar:domain-event:0.1.2")
+    implementation("dev.nightjar:domain-event-jdbc:0.1.2")
     // or, on Spring Boot, the whole surface at once:
-    implementation("dev.nightjar:nightjar-spring-boot-starter:<version>")
+    implementation("dev.nightjar:nightjar-spring-boot-starter:0.1.2")
 }
 ```
 
-> **GitHub Packages requires authentication even to read**, including for
-> public repositories. Consumers need a GitHub personal access token with the
-> `read:packages` scope — put `gpr.user` and `gpr.token` in
-> `~/.gradle/gradle.properties`. This is a GitHub limitation, not a nightjar
-> one; once nightjar is on Maven Central no credentials will be needed.
+with `gpr.user` / `gpr.token` in `~/.gradle/gradle.properties`.
 
-### Release assets (no account required)
+### Maven
 
-Each release attaches every module's jar and sources jar, plus
-`nightjar-<version>-maven-repo.zip` — a ready-made Maven repository with POMs
-and checksums. Unpack it and point a repository at it:
+```xml
+<repository>
+  <id>nightjar</id>
+  <url>https://maven.pkg.github.com/lorands/nightjar</url>
+</repository>
+
+<dependency>
+  <groupId>dev.nightjar</groupId>
+  <artifactId>domain-event</artifactId>
+  <version>0.1.2</version>
+</dependency>
+```
+
+with a matching `<server><id>nightjar</id>` in `~/.m2/settings.xml` carrying
+your username and token.
+
+### Release assets — no token required
+
+Every release attaches each module's jar and sources jar, plus
+`nightjar-<version>-maven-repo.zip`: a complete Maven repository with POMs and
+checksums. Unpack it and point a repository at the directory — transitive
+resolution works exactly as it does from the registry, with no token anywhere:
 
 ```kotlin
 repositories {
+    mavenCentral()
     maven { url = uri("file:///path/to/unpacked-maven-repo") }
 }
 ```
 
-### From source
+Transitive resolution behaves exactly as it does from the registry: the starter
+pulls all six nightjar modules it depends on, with no credentials anywhere.
+This is also the route for air-gapped builds and internal Nexus/Artifactory
+mirrors — unpack the zip into a hosted repository and everyone resolves
+nightjar normally.
 
-Build and install into your local Maven repository:
+Token-free public consumption is what Maven Central would solve; that is the
+next packaging step.
+
+### From source
 
 ```bash
 git clone https://github.com/lorands/nightjar.git && cd nightjar
-./gradlew build              # verifies everything hermetically
+./gradlew build               # verifies everything hermetically
 ./gradlew publishToMavenLocal # installs dev.nightjar:* into ~/.m2
 ```
 
@@ -124,6 +160,7 @@ devbox services up          # PostgreSQL on :6543, RabbitMQ on :5672
 - [migrations user manual](docs/migrations-manual.adoc) · [design](docs/migrations-design.md)
 - [coordination user manual](docs/coordination-manual.adoc) · [design](docs/coordination-design.md)
 - [Spring Boot starter manual](docs/spring-boot-starter-manual.adoc) · [design](docs/spring-boot-starter-design.md)
+- [Installation manual](docs/installation-manual.adoc) — consuming the jars from Gradle and Maven
 - Per-module READMEs for installation and usage
 
 ## Releasing

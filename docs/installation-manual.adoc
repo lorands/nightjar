@@ -1,0 +1,357 @@
+= nightjar Installation — User Manual
+:toc: left
+:toclevels: 3
+:icons: font
+:source-highlighter: rouge
+:sectnums:
+:nightjar-version: 0.1.2
+:repo: lorands/nightjar
+
+How to get nightjar's jars into a Gradle or Maven build. Artifacts are
+published to *GitHub Packages* and attached to every
+https://github.com/lorands/nightjar/releases[GitHub release]; nightjar is not
+on Maven Central yet.
+
+Group id is always `dev.nightjar`, and every module shares one version.
+
+[NOTE]
+.Reading from GitHub Packages requires authentication
+====
+GitHub's Maven registry demands credentials for *every* request, including
+reads of packages in a public repository. There is no anonymous access and no
+way for the publisher to enable it — this is a GitHub limitation, not a
+nightjar decision.
+
+This surprises people because GitHub's registries do not behave alike: public
+images pull anonymously from the *container* registry (`ghcr.io`), so the
+reasonable assumption is that a public Maven package behaves the same way. It
+does not. An unauthenticated request for a package that exists returns
+`401 Unauthorized`, exactly like one for a package that does not.
+
+If you cannot or would rather not hand a token to your build, use the
+<<offline,release-asset repository>> instead: it needs no account at all.
+====
+
+== Which modules do you need
+
+[cols="2,4,1"]
+|===
+| Artifact | Purpose | Runtime deps
+
+| `domain-event`
+| Domain events with a transactional outbox. The core; everything else builds on it
+| none
+
+| `domain-event-jdbc`
+| Outbox persistence over plain JDBC. Brings `domain-event`
+| none
+
+| `domain-event-rabbitmq`
+| RabbitMQ transport. Brings `domain-event`
+| `amqp-client`
+
+| `coordination`
+| Process lock, worker pool, scheduler
+| none
+
+| `coordination-jdbc`
+| Database-backed coordination. Brings `coordination` and `domain-event-jdbc`
+| none
+
+| `migrations`
+| Schema-manifest convention + data-migration engine
+| none
+
+| `migrations-jdbc`
+| Data-migration queues over JDBC. Brings `migrations` and `domain-event-jdbc`
+| none
+
+| `migrations-liquibase`
+| Deploy-time schema execution. Use in an init container or CLI, never at runtime
+| `liquibase-core`
+
+| `nightjar-spring-boot-starter`
+| Auto-configuration for everything above
+| Spring Boot
+|===
+
+Dependencies are declared `api`, so the `-jdbc` modules pull their cores in
+transitively — depend on `coordination-jdbc` and you get `coordination`,
+`domain-event-jdbc` and `domain-event` too.
+
+On Spring Boot, take the starter alone and add `domain-event-rabbitmq` or
+`migrations-liquibase` only if you want those (the starter treats both as
+optional and auto-configures them when present).
+
+== Getting a token
+
+Create a https://github.com/settings/tokens[personal access token (classic)]
+with the *`read:packages`* scope. No other scope is needed to consume
+packages, and for a public repository the token grants nothing beyond what is
+already public.
+
+Keep it out of your build files — the sections below put it in your per-user
+Gradle or Maven configuration, outside the project.
+
+== Gradle
+
+=== Kotlin DSL
+
+.build.gradle.kts
+[source,kotlin,subs="attributes+"]
+----
+repositories {
+    mavenCentral()
+    maven {
+        name = "nightjar"
+        url = uri("https://maven.pkg.github.com/{repo}")
+        credentials {
+            username = providers.gradleProperty("gpr.user").get()   // <1>
+            password = providers.gradleProperty("gpr.token").get()
+        }
+    }
+}
+
+dependencies {
+    implementation("dev.nightjar:domain-event:{nightjar-version}")
+    implementation("dev.nightjar:domain-event-jdbc:{nightjar-version}")
+}
+----
+<1> Read from `~/.gradle/gradle.properties`, never from a file in the
+    repository.
+
+.~/.gradle/gradle.properties
+[source,properties]
+----
+gpr.user=your-github-username
+gpr.token=ghp_your_token_with_read_packages
+----
+
+=== Groovy DSL
+
+.build.gradle
+[source,groovy,subs="attributes+"]
+----
+repositories {
+    mavenCentral()
+    maven {
+        name = 'nightjar'
+        url = 'https://maven.pkg.github.com/{repo}'
+        credentials {
+            username = providers.gradleProperty('gpr.user').get()
+            password = providers.gradleProperty('gpr.token').get()
+        }
+    }
+}
+
+dependencies {
+    implementation 'dev.nightjar:domain-event:{nightjar-version}'
+    implementation 'dev.nightjar:domain-event-jdbc:{nightjar-version}'
+}
+----
+
+=== Credentials from the environment
+
+Useful in CI, where a properties file is awkward. Gradle maps the environment
+variable `ORG_GRADLE_PROJECT_<name>` onto the Gradle property `<name>`, so with
+a repository named `nightjar` you can also use Gradle's built-in credential
+handling and set nothing in the build file:
+
+[source,kotlin,subs="attributes+"]
+----
+maven {
+    name = "nightjar"                                  // <1>
+    url = uri("https://maven.pkg.github.com/{repo}")
+    credentials(PasswordCredentials::class)
+}
+----
+<1> The name selects the property pair: `nightjarUsername` / `nightjarPassword`,
+    supplied in CI as `ORG_GRADLE_PROJECT_nightjarUsername` and
+    `ORG_GRADLE_PROJECT_nightjarPassword`.
+
+Gradle resolves these lazily, so a build that does not touch the repository
+never demands them, and a missing one fails with a message naming the property
+rather than an HTTP error.
+
+=== Version catalog
+
+.gradle/libs.versions.toml
+[source,toml,subs="attributes+"]
+----
+[versions]
+nightjar = "{nightjar-version}"
+
+[libraries]
+nightjar-domain-event = { module = "dev.nightjar:domain-event", version.ref = "nightjar" }
+nightjar-domain-event-jdbc = { module = "dev.nightjar:domain-event-jdbc", version.ref = "nightjar" }
+nightjar-coordination-jdbc = { module = "dev.nightjar:coordination-jdbc", version.ref = "nightjar" }
+nightjar-spring-boot-starter = { module = "dev.nightjar:nightjar-spring-boot-starter", version.ref = "nightjar" }
+----
+
+== Maven
+
+Maven needs the repository *and* a matching `<server>` entry — they are linked
+by id, and credentials never live in the POM.
+
+.~/.m2/settings.xml
+[source,xml]
+----
+<settings>
+  <servers>
+    <server>
+      <id>nightjar</id>                                <!--1-->
+      <username>your-github-username</username>
+      <password>ghp_your_token_with_read_packages</password>
+    </server>
+  </servers>
+</settings>
+----
+<1> Must match the `<repository><id>` below exactly.
+
+.pom.xml
+[source,xml,subs="attributes+"]
+----
+<repositories>
+  <repository>
+    <id>nightjar</id>
+    <url>https://maven.pkg.github.com/{repo}</url>
+    <releases><enabled>true</enabled></releases>
+    <snapshots><enabled>false</enabled></snapshots>     <!--1-->
+  </repository>
+</repositories>
+
+<dependencies>
+  <dependency>
+    <groupId>dev.nightjar</groupId>
+    <artifactId>domain-event</artifactId>
+    <version>{nightjar-version}</version>
+  </dependency>
+  <dependency>
+    <groupId>dev.nightjar</groupId>
+    <artifactId>domain-event-jdbc</artifactId>
+    <version>{nightjar-version}</version>
+  </dependency>
+</dependencies>
+----
+<1> Only tagged releases are published; there are no snapshots in the registry.
+
+To keep the repository out of every POM, move it into a `<profile>` in
+`settings.xml` with `<activeProfiles>` instead — same `<id>`, same effect,
+project files stay clean.
+
+== Continuous integration
+
+=== GitHub Actions
+
+Inside *this* repository, the automatic `GITHUB_TOKEN` is enough:
+
+[source,yaml]
+----
+permissions:
+  contents: read
+  packages: read
+
+steps:
+  - run: ./gradlew build
+    env:
+      ORG_GRADLE_PROJECT_nightjarUsername: ${{ github.actor }}
+      ORG_GRADLE_PROJECT_nightjarPassword: ${{ secrets.GITHUB_TOKEN }}
+----
+
+[IMPORTANT]
+====
+From a *different* repository this does not work. A workflow's `GITHUB_TOKEN`
+can only read packages belonging to its own repository, so consuming nightjar
+elsewhere needs either:
+
+* a personal access token with `read:packages`, stored as a repository secret
+  (`secrets.NIGHTJAR_TOKEN`), or
+* the package owner granting that repository access, under the package's
+  *Manage Actions access* settings.
+
+The error when neither is in place is a `401 Unauthorized`, not a permissions
+message — see <<troubleshooting>>.
+====
+
+=== Other CI systems
+
+Store the token as a secret and expose it as `ORG_GRADLE_PROJECT_nightjarPassword`
+(Gradle) or write it into `~/.m2/settings.xml` during the job (Maven).
+
+[[offline]]
+== Without a token: the release-asset repository
+
+Every release attaches `nightjar-<version>-maven-repo.zip` — a complete Maven
+repository with POMs, jars, sources jars and checksums. Downloading it needs no
+account, and neither does building against it.
+
+[source,bash,subs="attributes+"]
+----
+curl -LO https://github.com/{repo}/releases/download/v{nightjar-version}/nightjar-{nightjar-version}-maven-repo.zip
+unzip nightjar-{nightjar-version}-maven-repo.zip -d ~/nightjar-repo
+----
+
+Gradle:
+
+[source,kotlin]
+----
+repositories {
+    mavenCentral()
+    maven { url = uri("file://${System.getProperty("user.home")}/nightjar-repo") }
+}
+----
+
+Maven:
+
+[source,xml]
+----
+<repository>
+  <id>nightjar-local</id>
+  <url>file://${user.home}/nightjar-repo</url>
+</repository>
+----
+
+This also suits air-gapped builds and internal mirrors: unpack the zip into an
+existing Nexus/Artifactory hosted repository and nightjar resolves like any
+other dependency, for everyone, with no tokens.
+
+== Building from source
+
+[source,bash]
+----
+git clone https://github.com/lorands/nightjar.git && cd nightjar
+./gradlew publishToMavenLocal
+----
+
+Installs every module into `~/.m2/repository` as `0.1.0-SNAPSHOT`. Add
+`mavenLocal()` (Gradle) — Maven finds it without configuration.
+
+Pass `-Pversion=<x.y.z>` to install under a specific version instead.
+
+[[troubleshooting]]
+== Troubleshooting
+
+`401 Unauthorized`::
+No credentials reached the registry, or the token lacks `read:packages`.
+GitHub returns 401 rather than 404 for artifacts that do not exist, so this is
+also what a wrong version or artifact id looks like. Check the token scope
+first, then the coordinates.
+
+`Could not find dev.nightjar:...`::
+The repository is not declared in the build, or Gradle's
+`dependencyResolutionManagement` in `settings.gradle.kts` is overriding
+project repositories — declare it there instead of in `build.gradle.kts`.
+
+`Received status code 401 ... from server: Unauthorized` *in GitHub Actions*::
+A cross-repository build using the automatic `GITHUB_TOKEN`. That token cannot
+read another repository's packages; use a PAT or grant the repository access to
+the package.
+
+Maven ignores the credentials::
+The `<server><id>` and `<repository><id>` do not match. Maven links them by id
+and silently makes an anonymous request when they differ.
+
+A version that used to resolve now 401s::
+Published versions are immutable and are never removed by the release pipeline,
+but a package version *can* be deleted by hand in the GitHub UI. Check the
+package's version list.
